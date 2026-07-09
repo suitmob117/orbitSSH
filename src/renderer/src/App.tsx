@@ -1,0 +1,598 @@
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { FitAddon } from '@xterm/addon-fit';
+import { Terminal } from '@xterm/xterm';
+import {
+  Activity,
+  CheckCircle2,
+  Download,
+  FolderInput,
+  Play,
+  PlugZap,
+  Power,
+  RefreshCw,
+  Save,
+  Server,
+  TerminalSquare,
+  Upload
+} from 'lucide-react';
+import type {
+  AuthMethod,
+  AuthorizationLevel,
+  CommandRecord,
+  ConnectionProfile,
+  ConnectionProfileInput,
+  ConnectionSession,
+  FileTransferRequest
+} from '@shared/types';
+import { Badge, Button, DangerButton, Input, Label, SecondaryButton, Select } from './components/ui';
+import { cn } from './lib/utils';
+
+const AUTH_LABELS: Record<AuthMethod, string> = {
+  saved_password: '保存密码',
+  password_prompt: '每次输入密码',
+  ssh_agent: 'SSH Agent',
+  private_key: '私钥'
+};
+
+const ENABLED_AUTH_METHODS: AuthMethod[] = ['saved_password', 'ssh_agent', 'private_key'];
+
+const AUTH_LEVEL_LABELS: Record<AuthorizationLevel, string> = {
+  ask_every_time: '每次询问',
+  auto_readonly: '自动只读',
+  trusted_session: '信任会话'
+};
+
+const DEFAULT_FORM: ConnectionProfileInput = {
+  name: '',
+  host: '',
+  port: 22,
+  username: 'root',
+  authMethod: 'saved_password',
+  password: '',
+  privateKeyPath: '',
+  privateKeyPassphrase: '',
+  rememberPrivateKeyPassphrase: false,
+  connectTimeoutMs: 15000,
+  keepaliveIntervalMs: 15000,
+  jumpHost: ''
+};
+
+function healthTone(health?: string): 'green' | 'amber' | 'red' | 'neutral' {
+  if (health === 'connected') return 'green';
+  if (health === 'degraded') return 'amber';
+  if (health === 'disconnected') return 'red';
+  return 'neutral';
+}
+
+function healthLabel(health?: string): string {
+  if (health === 'connected') return '已连接';
+  if (health === 'degraded') return '异常';
+  if (health === 'disconnected') return '已断开';
+  return '未连接';
+}
+
+function toProfileForm(profile: ConnectionProfile): ConnectionProfileInput {
+  return {
+    name: profile.name,
+    host: profile.host,
+    port: profile.port,
+    username: profile.username,
+    authMethod: profile.authMethod,
+    password: '',
+    privateKeyPath: profile.privateKeyPath ?? '',
+    privateKeyPassphrase: '',
+    rememberPrivateKeyPassphrase: Boolean(profile.privateKeyPassphraseCredentialId),
+    connectTimeoutMs: profile.connectTimeoutMs,
+    keepaliveIntervalMs: profile.keepaliveIntervalMs,
+    jumpHost: profile.jumpHost ?? ''
+  };
+}
+
+function TerminalPanel({ session }: { session?: ConnectionSession }): JSX.Element {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const terminalRef = useRef<Terminal>();
+  const terminalIdRef = useRef<string>();
+
+  useEffect(() => {
+    if (!session || !containerRef.current) {
+      return;
+    }
+
+    const terminal = new Terminal({
+      cursorBlink: true,
+      fontFamily: 'Cascadia Mono, Consolas, monospace',
+      fontSize: 13,
+      theme: {
+        background: '#101418',
+        foreground: '#d7dde5',
+        cursor: '#f5b942'
+      }
+    });
+    const fitAddon = new FitAddon();
+    terminal.loadAddon(fitAddon);
+    terminal.open(containerRef.current);
+    fitAddon.fit();
+    terminal.writeln('正在打开会话终端...');
+    terminalRef.current = terminal;
+
+    let disposed = false;
+    const unsubscribe = window.aiSsh.onTerminalData((chunk) => {
+      if (chunk.terminalId === terminalIdRef.current) {
+        terminal.write(chunk.data);
+      }
+    });
+
+    void window.aiSsh
+      .openTerminal(session.id)
+      .then((terminalId) => {
+        if (disposed) {
+          void window.aiSsh.closeTerminal(terminalId);
+          return;
+        }
+        terminalIdRef.current = terminalId;
+        terminal.onData((data) => {
+          void window.aiSsh.writeTerminal(terminalId, data);
+        });
+      })
+      .catch((error: unknown) => {
+        terminal.writeln(`\r\n终端打开失败：${error instanceof Error ? error.message : String(error)}`);
+      });
+
+    const onResize = () => fitAddon.fit();
+    window.addEventListener('resize', onResize);
+
+    return () => {
+      disposed = true;
+      window.removeEventListener('resize', onResize);
+      unsubscribe();
+      if (terminalIdRef.current) {
+        void window.aiSsh.closeTerminal(terminalIdRef.current);
+      }
+      terminal.dispose();
+      terminalRef.current = undefined;
+      terminalIdRef.current = undefined;
+    };
+  }, [session?.id]);
+
+  return <div ref={containerRef} className="h-full min-h-[220px] overflow-hidden rounded-md bg-[#101418]" />;
+}
+
+export function App(): JSX.Element {
+  const [profiles, setProfiles] = useState<ConnectionProfile[]>([]);
+  const [sessions, setSessions] = useState<ConnectionSession[]>([]);
+  const [history, setHistory] = useState<CommandRecord[]>([]);
+  const [selectedProfileId, setSelectedProfileId] = useState<string>();
+  const [editingId, setEditingId] = useState<string>();
+  const [form, setForm] = useState<ConnectionProfileInput>(DEFAULT_FORM);
+  const [authorizationLevel, setAuthorizationLevel] = useState<AuthorizationLevel>('ask_every_time');
+  const [command, setCommand] = useState('pwd && uptime');
+  const [commandOutput, setCommandOutput] = useState('');
+  const [transfer, setTransfer] = useState<FileTransferRequest>({
+    sessionId: '',
+    localPath: '',
+    remotePath: '',
+    direction: 'upload'
+  });
+  const [terminalOpen, setTerminalOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState<string>();
+
+  const selectedProfile = profiles.find((profile) => profile.id === selectedProfileId);
+  const activeSession = useMemo(() => {
+    if (!selectedProfileId) {
+      return undefined;
+    }
+    return sessions.find((session) => session.profileId === selectedProfileId && session.health !== 'disconnected');
+  }, [selectedProfileId, sessions]);
+
+  async function refresh(): Promise<void> {
+    const [nextProfiles, nextSessions, nextHistory] = await Promise.all([
+      window.aiSsh.listProfiles(),
+      window.aiSsh.listSessions(),
+      window.aiSsh.listHistory()
+    ]);
+    setProfiles(nextProfiles);
+    setSessions(nextSessions);
+    setHistory(nextHistory);
+    if (!selectedProfileId && nextProfiles[0]) {
+      setSelectedProfileId(nextProfiles[0].id);
+      setEditingId(nextProfiles[0].id);
+      setForm(toProfileForm(nextProfiles[0]));
+    }
+  }
+
+  useEffect(() => {
+    void refresh();
+  }, []);
+
+  useEffect(() => {
+    if (activeSession) {
+      setTransfer((current) => ({ ...current, sessionId: activeSession.id }));
+    }
+  }, [activeSession?.id]);
+
+  function selectProfile(profile: ConnectionProfile): void {
+    setSelectedProfileId(profile.id);
+    setEditingId(profile.id);
+    setForm(toProfileForm(profile));
+    setCommandOutput('');
+    setTerminalOpen(false);
+  }
+
+  async function saveProfile(): Promise<void> {
+    setBusy(true);
+    setMessage(undefined);
+    try {
+      const saved = await window.aiSsh.saveProfile(form, editingId);
+      await refresh();
+      setSelectedProfileId(saved.id);
+      setEditingId(saved.id);
+      setForm(toProfileForm(saved));
+      setMessage('连接配置已保存');
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function openSession(): Promise<void> {
+    if (!selectedProfileId) return;
+    setBusy(true);
+    setMessage('正在连接...');
+    try {
+      const session = await window.aiSsh.openSession(selectedProfileId, authorizationLevel);
+      await refresh();
+      setTransfer((current) => ({ ...current, sessionId: session.id }));
+      setMessage('连接已建立，后续操作会复用此会话');
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function closeSession(): Promise<void> {
+    if (!activeSession) return;
+    await window.aiSsh.closeSession(activeSession.id);
+    setTerminalOpen(false);
+    await refresh();
+  }
+
+  async function checkHealth(): Promise<void> {
+    if (!activeSession) return;
+    setBusy(true);
+    try {
+      const session = await window.aiSsh.getSessionHealth(activeSession.id);
+      setSessions((items) => items.map((item) => (item.id === session.id ? session : item)));
+      setMessage(`健康检查：${healthLabel(session.health)}`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function runCommand(): Promise<void> {
+    if (!activeSession || !command.trim()) return;
+    setBusy(true);
+    setMessage(undefined);
+    try {
+      const result = await window.aiSsh.runCommand(activeSession.id, command);
+      setCommandOutput([result.stdout, result.stderr].filter(Boolean).join('\n'));
+      setHistory((items) => [...items, result.record]);
+      setMessage(`命令完成：退出码 ${result.record.exitCode ?? '未知'}`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function transferFile(): Promise<void> {
+    if (!activeSession) return;
+    setBusy(true);
+    setMessage(undefined);
+    try {
+      await window.aiSsh.transferFile({ ...transfer, sessionId: activeSession.id });
+      setMessage(transfer.direction === 'upload' ? '上传完成' : '下载完成');
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const visibleHistory = activeSession ? history.filter((record) => record.sessionId === activeSession.id) : [];
+
+  return (
+    <div className="grid h-full grid-cols-[280px_1fr_340px] grid-rows-[1fr_auto] overflow-hidden">
+      <aside className="border-r border-border bg-card">
+        <div className="flex h-14 items-center gap-2 border-b border-border px-4">
+          <Server className="h-5 w-5 text-primary" />
+          <div>
+            <div className="text-sm font-semibold">AI SSH</div>
+            <div className="text-xs text-muted-foreground">本地持久连接工作台</div>
+          </div>
+        </div>
+        <div className="space-y-2 p-3">
+          <SecondaryButton
+            className="w-full justify-start"
+            onClick={() => {
+              setEditingId(undefined);
+              setSelectedProfileId(undefined);
+              setForm(DEFAULT_FORM);
+            }}
+          >
+            <FolderInput className="h-4 w-4" />
+            新建连接
+          </SecondaryButton>
+          <div className="space-y-2">
+            {profiles.map((profile) => {
+              const session = sessions.find((item) => item.profileId === profile.id && item.health !== 'disconnected');
+              return (
+                <button
+                  key={profile.id}
+                  className={cn(
+                    'w-full rounded-md border p-3 text-left transition hover:bg-muted',
+                    selectedProfileId === profile.id ? 'border-primary bg-primary/5' : 'border-border bg-background'
+                  )}
+                  onClick={() => selectProfile(profile)}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="truncate text-sm font-medium">{profile.name}</span>
+                    <Badge tone={healthTone(session?.health)}>{healthLabel(session?.health)}</Badge>
+                  </div>
+                  <div className="mt-1 truncate text-xs text-muted-foreground">
+                    {profile.username}@{profile.host}:{profile.port}
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      </aside>
+
+      <main className="min-w-0 overflow-auto p-5">
+        <div className="mb-4 flex items-center justify-between gap-3">
+          <div>
+            <h1 className="text-xl font-semibold">{selectedProfile?.name ?? '连接配置'}</h1>
+            <p className="text-sm text-muted-foreground">配置服务器，建立一次连接，然后复用同一个会话执行操作。</p>
+          </div>
+          <div className="flex items-center gap-2">
+            <Badge tone={healthTone(activeSession?.health)}>{healthLabel(activeSession?.health)}</Badge>
+            <Select
+              className="w-32"
+              value={authorizationLevel}
+              onChange={(event) => setAuthorizationLevel(event.target.value as AuthorizationLevel)}
+            >
+              {Object.entries(AUTH_LEVEL_LABELS).map(([value, label]) => (
+                <option key={value} value={value}>
+                  {label}
+                </option>
+              ))}
+            </Select>
+            <Button onClick={openSession} disabled={!selectedProfileId || busy}>
+              <PlugZap className="h-4 w-4" />
+              连接
+            </Button>
+            <DangerButton onClick={closeSession} disabled={!activeSession}>
+              <Power className="h-4 w-4" />
+              关闭
+            </DangerButton>
+          </div>
+        </div>
+
+        {message ? (
+          <div className="mb-4 rounded-md border border-border bg-card px-3 py-2 text-sm text-muted-foreground">{message}</div>
+        ) : null}
+
+        <section className="grid grid-cols-2 gap-4">
+          <div className="rounded-md border border-border bg-card p-4">
+            <div className="mb-3 flex items-center justify-between">
+              <h2 className="text-sm font-semibold">服务器配置</h2>
+              <Button onClick={saveProfile} disabled={busy}>
+                <Save className="h-4 w-4" />
+                保存
+              </Button>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <Field label="配置名称">
+                <Input value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} />
+              </Field>
+              <Field label="用户名">
+                <Input value={form.username} onChange={(event) => setForm({ ...form, username: event.target.value })} />
+              </Field>
+              <Field label="主机地址">
+                <Input value={form.host} onChange={(event) => setForm({ ...form, host: event.target.value })} />
+              </Field>
+              <Field label="端口">
+                <Input
+                  type="number"
+                  value={form.port}
+                  onChange={(event) => setForm({ ...form, port: Number(event.target.value) })}
+                />
+              </Field>
+              <Field label="认证方式">
+                <Select
+                  value={form.authMethod}
+                  onChange={(event) => setForm({ ...form, authMethod: event.target.value as AuthMethod })}
+                >
+                  {ENABLED_AUTH_METHODS.map((value) => (
+                    <option key={value} value={value}>
+                      {AUTH_LABELS[value]}
+                    </option>
+                  ))}
+                </Select>
+              </Field>
+              <Field label="密码">
+                <Input
+                  type="password"
+                  placeholder={editingId ? '留空表示不修改' : ''}
+                  disabled={form.authMethod !== 'saved_password'}
+                  value={form.password}
+                  onChange={(event) => setForm({ ...form, password: event.target.value })}
+                />
+              </Field>
+              <Field label="私钥路径">
+                <Input
+                  disabled={form.authMethod !== 'private_key'}
+                  value={form.privateKeyPath}
+                  onChange={(event) => setForm({ ...form, privateKeyPath: event.target.value })}
+                />
+              </Field>
+              <Field label="私钥口令">
+                <Input
+                  type="password"
+                  disabled={form.authMethod !== 'private_key'}
+                  value={form.privateKeyPassphrase}
+                  onChange={(event) => setForm({ ...form, privateKeyPassphrase: event.target.value })}
+                />
+              </Field>
+              <Field label="连接超时 ms">
+                <Input
+                  type="number"
+                  value={form.connectTimeoutMs}
+                  onChange={(event) => setForm({ ...form, connectTimeoutMs: Number(event.target.value) })}
+                />
+              </Field>
+              <Field label="Keepalive ms">
+                <Input
+                  type="number"
+                  value={form.keepaliveIntervalMs}
+                  onChange={(event) => setForm({ ...form, keepaliveIntervalMs: Number(event.target.value) })}
+                />
+              </Field>
+            </div>
+          </div>
+
+          <div className="rounded-md border border-border bg-card p-4">
+            <div className="mb-3 flex items-center justify-between">
+              <h2 className="text-sm font-semibold">命令执行</h2>
+              <SecondaryButton onClick={checkHealth} disabled={!activeSession || busy}>
+                <RefreshCw className="h-4 w-4" />
+                健康检查
+              </SecondaryButton>
+            </div>
+            <textarea
+              className="h-28 w-full resize-none rounded-md border border-input bg-background p-3 font-mono text-sm outline-none focus:border-ring focus:ring-2 focus:ring-ring/20"
+              value={command}
+              onChange={(event) => setCommand(event.target.value)}
+            />
+            <div className="mt-3 flex justify-end">
+              <Button onClick={runCommand} disabled={!activeSession || busy}>
+                <Play className="h-4 w-4" />
+                执行命令
+              </Button>
+            </div>
+            <pre className="mt-3 h-48 overflow-auto rounded-md bg-[#101418] p-3 text-xs text-slate-100">
+              {commandOutput || '命令输出会显示在这里。'}
+            </pre>
+          </div>
+        </section>
+
+        <section className="mt-4 rounded-md border border-border bg-card p-4">
+          <div className="mb-3 flex items-center gap-2">
+            <Activity className="h-4 w-4 text-primary" />
+            <h2 className="text-sm font-semibold">执行记录</h2>
+          </div>
+          <div className="max-h-56 space-y-2 overflow-auto">
+            {visibleHistory.length === 0 ? (
+              <div className="text-sm text-muted-foreground">暂无记录。</div>
+            ) : (
+              visibleHistory
+                .slice()
+                .reverse()
+                .map((record) => (
+                  <div key={record.id} className="rounded-md border border-border bg-background p-3">
+                    <div className="flex items-center justify-between gap-3">
+                      <code className="truncate text-sm">{record.command}</code>
+                      <Badge tone={record.exitCode === 0 ? 'green' : 'amber'}>退出码 {record.exitCode ?? '未知'}</Badge>
+                    </div>
+                    <div className="mt-1 text-xs text-muted-foreground">{record.summary}</div>
+                  </div>
+                ))
+            )}
+          </div>
+        </section>
+      </main>
+
+      <aside className="border-l border-border bg-card p-4">
+        <div className="mb-4">
+          <h2 className="text-sm font-semibold">会话状态</h2>
+          <div className="mt-3 space-y-2 text-sm">
+            <InfoRow label="当前服务器" value={selectedProfile?.name ?? '未选择'} />
+            <InfoRow label="连接状态" value={healthLabel(activeSession?.health)} />
+            <InfoRow label="授权等级" value={AUTH_LEVEL_LABELS[authorizationLevel]} />
+          </div>
+        </div>
+
+        <div className="border-t border-border pt-4">
+          <h2 className="mb-3 text-sm font-semibold">文件传输</h2>
+          <div className="space-y-3">
+            <Field label="方向">
+              <Select
+                value={transfer.direction}
+                onChange={(event) =>
+                  setTransfer({ ...transfer, direction: event.target.value as FileTransferRequest['direction'] })
+                }
+              >
+                <option value="upload">上传到服务器</option>
+                <option value="download">下载到本地</option>
+              </Select>
+            </Field>
+            <Field label="本地路径">
+              <Input
+                value={transfer.localPath}
+                onChange={(event) => setTransfer({ ...transfer, localPath: event.target.value })}
+              />
+            </Field>
+            <Field label="远程路径">
+              <Input
+                value={transfer.remotePath}
+                onChange={(event) => setTransfer({ ...transfer, remotePath: event.target.value })}
+              />
+            </Field>
+            <Button className="w-full" disabled={!activeSession || busy} onClick={transferFile}>
+              {transfer.direction === 'upload' ? <Upload className="h-4 w-4" /> : <Download className="h-4 w-4" />}
+              开始传输
+            </Button>
+          </div>
+        </div>
+
+        <div className="mt-4 border-t border-border pt-4">
+          <SecondaryButton className="w-full" disabled={!activeSession} onClick={() => setTerminalOpen((value) => !value)}>
+            <TerminalSquare className="h-4 w-4" />
+            {terminalOpen ? '隐藏终端' : '打开终端'}
+          </SecondaryButton>
+        </div>
+      </aside>
+
+      <div className={cn('col-span-3 border-t border-border bg-card p-3', terminalOpen ? 'block' : 'hidden')}>
+        <div className="mb-2 flex items-center gap-2 text-sm font-medium">
+          <CheckCircle2 className="h-4 w-4 text-emerald-600" />
+          会话终端
+        </div>
+        <div className="h-[260px]">{terminalOpen ? <TerminalPanel session={activeSession} /> : null}</div>
+      </div>
+    </div>
+  );
+}
+
+function Field({ label, children }: { label: string; children: React.ReactNode }): JSX.Element {
+  return (
+    <div className="space-y-1">
+      <Label>{label}</Label>
+      {children}
+    </div>
+  );
+}
+
+function InfoRow({ label, value }: { label: string; value: string }): JSX.Element {
+  return (
+    <div className="flex items-center justify-between gap-3 rounded-md border border-border bg-background px-3 py-2">
+      <span className="text-muted-foreground">{label}</span>
+      <span className="truncate font-medium">{value}</span>
+    </div>
+  );
+}
