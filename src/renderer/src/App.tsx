@@ -354,15 +354,15 @@ export function App(): JSX.Element {
       </aside>
 
       <main className="min-w-0 overflow-auto p-5">
-        <div className="mb-4 flex items-center justify-between gap-3">
-          <div>
+        <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+          <div className="min-w-[220px] flex-1">
             <h1 className="text-xl font-semibold">{selectedProfile?.name ?? '连接配置'}</h1>
             <p className="text-sm text-muted-foreground">配置服务器，建立一次连接，然后复用同一个会话执行操作。</p>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex min-w-0 flex-wrap items-center justify-start gap-2">
             <Badge tone={healthTone(activeSession?.health)}>{healthLabel(activeSession?.health)}</Badge>
             <Select
-              className="w-32"
+              className="w-32 shrink-0"
               value={authorizationLevel}
               onChange={(event) => setAuthorizationLevel(event.target.value as AuthorizationLevel)}
             >
@@ -387,7 +387,7 @@ export function App(): JSX.Element {
           <div className="mb-4 rounded-md border border-border bg-card px-3 py-2 text-sm text-muted-foreground">{message}</div>
         ) : null}
 
-        <section className="grid grid-cols-2 gap-4">
+        <section className="grid grid-cols-1 gap-4 2xl:grid-cols-2">
           <div className="rounded-md border border-border bg-card p-4">
             <div className="mb-3 flex items-center justify-between">
               <h2 className="text-sm font-semibold">服务器配置</h2>
@@ -396,7 +396,7 @@ export function App(): JSX.Element {
                 保存
               </Button>
             </div>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 gap-3 xl:grid-cols-2">
               <Field label="配置名称">
                 <Input value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} />
               </Field>
