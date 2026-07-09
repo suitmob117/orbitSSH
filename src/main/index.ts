@@ -1,4 +1,5 @@
 import { app, BrowserWindow, ipcMain } from 'electron';
+import { existsSync } from 'node:fs';
 import path from 'node:path';
 import type { ConnectionProfileInput, FileTransferRequest, TerminalChunk } from '@shared/types';
 import { fileTransferSchema, profileInputSchema } from '@shared/validation';
@@ -7,6 +8,12 @@ import { createCoreServices } from '@core/services';
 const { profileStore, historyStore, sessionManager } = createCoreServices();
 
 let mainWindow: BrowserWindow | undefined;
+
+function resolvePreloadPath(): string {
+  const candidates = [path.join(__dirname, '../preload/index.mjs'), path.join(__dirname, '../preload/index.js')];
+  const existing = candidates.find((candidate) => existsSync(candidate));
+  return existing ?? candidates[0];
+}
 
 function createWindow(): void {
   mainWindow = new BrowserWindow({
@@ -18,7 +25,7 @@ function createWindow(): void {
     autoHideMenuBar: true,
     backgroundColor: '#f8fafc',
     webPreferences: {
-      preload: path.join(__dirname, '../preload/index.js'),
+      preload: resolvePreloadPath(),
       sandbox: false,
       contextIsolation: true,
       nodeIntegration: false

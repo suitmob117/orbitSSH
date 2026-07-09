@@ -5,6 +5,8 @@ import {
   Activity,
   CheckCircle2,
   Download,
+  Eye,
+  EyeOff,
   FolderInput,
   Play,
   PlugZap,
@@ -174,6 +176,8 @@ export function App(): JSX.Element {
     direction: 'upload'
   });
   const [terminalOpen, setTerminalOpen] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
+  const [showPrivateKeyPassphrase, setShowPrivateKeyPassphrase] = useState(false);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string>();
 
@@ -426,13 +430,21 @@ export function App(): JSX.Element {
                 </Select>
               </Field>
               <Field label="密码">
-                <Input
-                  type="password"
-                  placeholder={editingId ? '留空表示不修改' : ''}
-                  disabled={form.authMethod !== 'saved_password'}
-                  value={form.password}
-                  onChange={(event) => setForm({ ...form, password: event.target.value })}
-                />
+                <div className="relative">
+                  <Input
+                    className="pr-10"
+                    type={showPassword ? 'text' : 'password'}
+                    placeholder={editingId ? '留空表示不修改' : ''}
+                    disabled={form.authMethod !== 'saved_password'}
+                    value={form.password}
+                    onChange={(event) => setForm({ ...form, password: event.target.value })}
+                  />
+                  <PasswordToggle
+                    pressed={showPassword}
+                    disabled={form.authMethod !== 'saved_password'}
+                    onClick={() => setShowPassword((value) => !value)}
+                  />
+                </div>
               </Field>
               <Field label="私钥路径">
                 <Input
@@ -442,12 +454,20 @@ export function App(): JSX.Element {
                 />
               </Field>
               <Field label="私钥口令">
-                <Input
-                  type="password"
-                  disabled={form.authMethod !== 'private_key'}
-                  value={form.privateKeyPassphrase}
-                  onChange={(event) => setForm({ ...form, privateKeyPassphrase: event.target.value })}
-                />
+                <div className="relative">
+                  <Input
+                    className="pr-10"
+                    type={showPrivateKeyPassphrase ? 'text' : 'password'}
+                    disabled={form.authMethod !== 'private_key'}
+                    value={form.privateKeyPassphrase}
+                    onChange={(event) => setForm({ ...form, privateKeyPassphrase: event.target.value })}
+                  />
+                  <PasswordToggle
+                    pressed={showPrivateKeyPassphrase}
+                    disabled={form.authMethod !== 'private_key'}
+                    onClick={() => setShowPrivateKeyPassphrase((value) => !value)}
+                  />
+                </div>
               </Field>
               <Field label="连接超时 ms">
                 <Input
@@ -594,5 +614,28 @@ function InfoRow({ label, value }: { label: string; value: string }): JSX.Elemen
       <span className="text-muted-foreground">{label}</span>
       <span className="truncate font-medium">{value}</span>
     </div>
+  );
+}
+
+function PasswordToggle({
+  pressed,
+  disabled,
+  onClick
+}: {
+  pressed: boolean;
+  disabled?: boolean;
+  onClick: () => void;
+}): JSX.Element {
+  const Icon = pressed ? EyeOff : Eye;
+  return (
+    <button
+      aria-label={pressed ? '隐藏密码' : '显示密码'}
+      className="absolute right-2 top-1/2 inline-flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-md text-muted-foreground transition hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+      disabled={disabled}
+      type="button"
+      onClick={onClick}
+    >
+      <Icon className="h-4 w-4" />
+    </button>
   );
 }
