@@ -22,6 +22,7 @@ function createWindow(): void {
     minWidth: 1100,
     minHeight: 720,
     title: 'AI SSH',
+    icon: path.join(app.getAppPath(), 'build', 'icon.png'),
     autoHideMenuBar: true,
     backgroundColor: '#f8fafc',
     webPreferences: {

@@ -12,8 +12,9 @@ import {
   PlugZap,
   Power,
   RefreshCw,
+  Moon,
   Save,
-  Server,
+  Sun,
   TerminalSquare,
   Upload
 } from 'lucide-react';
@@ -105,9 +106,11 @@ function TerminalPanel({ session }: { session?: ConnectionSession }): JSX.Elemen
       fontFamily: 'Cascadia Mono, Consolas, monospace',
       fontSize: 13,
       theme: {
-        background: '#101418',
-        foreground: '#d7dde5',
-        cursor: '#f5b942'
+        background: '#0a0e17',
+        foreground: '#d7e3f4',
+        cursor: '#22d3ee',
+        cursorAccent: '#0a0e17',
+        selectionBackground: 'rgba(34,211,238,0.25)'
       }
     });
     const fitAddon = new FitAddon();
@@ -156,7 +159,12 @@ function TerminalPanel({ session }: { session?: ConnectionSession }): JSX.Elemen
     };
   }, [session?.id]);
 
-  return <div ref={containerRef} className="h-full min-h-[220px] overflow-hidden rounded-md bg-[#101418]" />;
+  return (
+    <div
+      ref={containerRef}
+      className="h-full min-h-[220px] overflow-hidden rounded-lg bg-[#0a0e17] ring-1 ring-border/60"
+    />
+  );
 }
 
 export function App(): JSX.Element {
@@ -180,6 +188,7 @@ export function App(): JSX.Element {
   const [showPrivateKeyPassphrase, setShowPrivateKeyPassphrase] = useState(false);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string>();
+  const [theme, setTheme] = useState<'light' | 'dark'>('light');
 
   const selectedProfile = profiles.find((profile) => profile.id === selectedProfileId);
   const activeSession = useMemo(() => {
@@ -208,6 +217,10 @@ export function App(): JSX.Element {
   useEffect(() => {
     void refresh();
   }, []);
+
+  useEffect(() => {
+    document.documentElement.classList.toggle('dark', theme === 'dark');
+  }, [theme]);
 
   useEffect(() => {
     if (activeSession) {
@@ -311,13 +324,23 @@ export function App(): JSX.Element {
 
   return (
     <div className="grid h-full grid-cols-[280px_1fr_340px] grid-rows-[1fr_auto] overflow-hidden">
-      <aside className="border-r border-border bg-card">
-        <div className="flex h-14 items-center gap-2 border-b border-border px-4">
-          <Server className="h-5 w-5 text-primary" />
-          <div>
-            <div className="text-sm font-semibold">AI SSH</div>
-            <div className="text-xs text-muted-foreground">本地持久连接工作台</div>
+      <aside className="glass border-r border-border/60">
+        <div className="flex h-16 items-center gap-3 border-b border-border/60 px-4">
+          <div className="flex h-9 w-9 items-center justify-center overflow-hidden rounded-lg shadow-glow-sm ring-1 ring-border">
+            <img src="/icon.png" alt="AI SSH" className="h-full w-full object-cover" />
           </div>
+          <div className="min-w-0">
+            <div className="text-sm font-semibold tracking-wide text-gradient">AI SSH</div>
+            <div className="truncate text-xs text-muted-foreground">本地持久连接工作台</div>
+          </div>
+          <button
+            type="button"
+            onClick={() => setTheme((value) => (value === 'dark' ? 'light' : 'dark'))}
+            className="ml-auto inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-border bg-card text-muted-foreground transition-all duration-200 hover:border-primary/40 hover:text-foreground"
+            title="切换深色 / 浅色主题"
+          >
+            {theme === 'dark' ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+          </button>
         </div>
         <div className="space-y-2 p-3">
           <SecondaryButton
@@ -338,8 +361,10 @@ export function App(): JSX.Element {
                 <button
                   key={profile.id}
                   className={cn(
-                    'w-full rounded-md border p-3 text-left transition hover:bg-muted',
-                    selectedProfileId === profile.id ? 'border-primary bg-primary/5' : 'border-border bg-background'
+                    'w-full rounded-lg border p-3 text-left transition-all duration-200',
+                    selectedProfileId === profile.id
+                      ? 'border-primary/60 bg-primary/10 shadow-glow-sm'
+                      : 'border-border/60 bg-transparent hover:border-border hover:bg-muted'
                   )}
                   onClick={() => selectProfile(profile)}
                 >
@@ -360,7 +385,7 @@ export function App(): JSX.Element {
       <main className="min-w-0 overflow-auto p-5">
         <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
           <div className="min-w-[220px] flex-1">
-            <h1 className="text-xl font-semibold">{selectedProfile?.name ?? '连接配置'}</h1>
+            <h1 className="text-2xl font-bold tracking-tight text-gradient">{selectedProfile?.name ?? '连接配置'}</h1>
             <p className="text-sm text-muted-foreground">配置服务器，建立一次连接，然后复用同一个会话执行操作。</p>
           </div>
           <div className="flex min-w-0 flex-wrap items-center justify-start gap-2">
@@ -388,13 +413,13 @@ export function App(): JSX.Element {
         </div>
 
         {message ? (
-          <div className="mb-4 rounded-md border border-border bg-card px-3 py-2 text-sm text-muted-foreground">{message}</div>
+          <div className="mb-4 animate-fade-in-up rounded-lg border border-primary/30 bg-primary/[0.07] px-4 py-2.5 text-sm text-foreground/90 shadow-glow-sm">{message}</div>
         ) : null}
 
         <section className="grid grid-cols-1 gap-4 2xl:grid-cols-2">
-          <div className="rounded-md border border-border bg-card p-4">
+          <div className="rounded-xl glass p-5 shadow-card">
             <div className="mb-3 flex items-center justify-between">
-              <h2 className="text-sm font-semibold">服务器配置</h2>
+              <h2 className="text-sm font-semibold tracking-wide text-foreground/90">服务器配置</h2>
               <Button onClick={saveProfile} disabled={busy}>
                 <Save className="h-4 w-4" />
                 保存
@@ -486,16 +511,16 @@ export function App(): JSX.Element {
             </div>
           </div>
 
-          <div className="rounded-md border border-border bg-card p-4">
+          <div className="rounded-xl glass p-5 shadow-card">
             <div className="mb-3 flex items-center justify-between">
-              <h2 className="text-sm font-semibold">命令执行</h2>
+              <h2 className="text-sm font-semibold tracking-wide text-foreground/90">命令执行</h2>
               <SecondaryButton onClick={checkHealth} disabled={!activeSession || busy}>
                 <RefreshCw className="h-4 w-4" />
                 健康检查
               </SecondaryButton>
             </div>
             <textarea
-              className="h-28 w-full resize-none rounded-md border border-input bg-background p-3 font-mono text-sm outline-none focus:border-ring focus:ring-2 focus:ring-ring/20"
+              className="h-28 w-full resize-none rounded-lg border border-input bg-background p-3 font-mono text-sm text-foreground outline-none transition-all placeholder:text-muted-foreground/60 hover:border-primary/40 focus:border-primary focus:ring-2 focus:ring-primary/20"
               value={command}
               onChange={(event) => setCommand(event.target.value)}
             />
@@ -505,16 +530,16 @@ export function App(): JSX.Element {
                 执行命令
               </Button>
             </div>
-            <pre className="mt-3 h-48 overflow-auto rounded-md bg-[#101418] p-3 text-xs text-slate-100">
+            <pre className="mt-3 h-48 overflow-auto rounded-lg bg-[#0a0e17] p-3 font-mono text-xs text-slate-100 ring-1 ring-border/60">
               {commandOutput || '命令输出会显示在这里。'}
             </pre>
           </div>
         </section>
 
-        <section className="mt-4 rounded-md border border-border bg-card p-4">
+        <section className="mt-4 rounded-xl glass p-5 shadow-card">
           <div className="mb-3 flex items-center gap-2">
             <Activity className="h-4 w-4 text-primary" />
-            <h2 className="text-sm font-semibold">执行记录</h2>
+            <h2 className="text-sm font-semibold tracking-wide text-foreground/90">执行记录</h2>
           </div>
           <div className="max-h-56 space-y-2 overflow-auto">
             {visibleHistory.length === 0 ? (
@@ -524,7 +549,7 @@ export function App(): JSX.Element {
                 .slice()
                 .reverse()
                 .map((record) => (
-                  <div key={record.id} className="rounded-md border border-border bg-background p-3">
+                  <div key={record.id} className="rounded-lg border border-border/60 bg-muted/40 p-3 transition hover:border-border">
                     <div className="flex items-center justify-between gap-3">
                       <code className="truncate text-sm">{record.command}</code>
                       <Badge tone={record.exitCode === 0 ? 'green' : 'amber'}>退出码 {record.exitCode ?? '未知'}</Badge>
@@ -537,9 +562,9 @@ export function App(): JSX.Element {
         </section>
       </main>
 
-      <aside className="border-l border-border bg-card p-4">
+      <aside className="glass border-l border-border/60 p-4">
         <div className="mb-4">
-          <h2 className="text-sm font-semibold">会话状态</h2>
+          <h2 className="text-sm font-semibold tracking-wide text-foreground/90">会话状态</h2>
           <div className="mt-3 space-y-2 text-sm">
             <InfoRow label="当前服务器" value={selectedProfile?.name ?? '未选择'} />
             <InfoRow label="连接状态" value={healthLabel(activeSession?.health)} />
@@ -547,8 +572,8 @@ export function App(): JSX.Element {
           </div>
         </div>
 
-        <div className="border-t border-border pt-4">
-          <h2 className="mb-3 text-sm font-semibold">文件传输</h2>
+        <div className="border-t border-border/60 pt-4">
+          <h2 className="mb-3 text-sm font-semibold tracking-wide text-foreground/90">文件传输</h2>
           <div className="space-y-3">
             <Field label="方向">
               <Select
@@ -580,7 +605,7 @@ export function App(): JSX.Element {
           </div>
         </div>
 
-        <div className="mt-4 border-t border-border pt-4">
+        <div className="mt-4 border-t border-border/60 pt-4">
           <SecondaryButton className="w-full" disabled={!activeSession} onClick={() => setTerminalOpen((value) => !value)}>
             <TerminalSquare className="h-4 w-4" />
             {terminalOpen ? '隐藏终端' : '打开终端'}
@@ -588,9 +613,9 @@ export function App(): JSX.Element {
         </div>
       </aside>
 
-      <div className={cn('col-span-3 border-t border-border bg-card p-3', terminalOpen ? 'block' : 'hidden')}>
+      <div className={cn('col-span-3 glass border-t border-border/60 p-3', terminalOpen ? 'block' : 'hidden')}>
         <div className="mb-2 flex items-center gap-2 text-sm font-medium">
-          <CheckCircle2 className="h-4 w-4 text-emerald-600" />
+          <CheckCircle2 className="h-4 w-4 text-emerald-500 dark:text-emerald-400" />
           会话终端
         </div>
         <div className="h-[260px]">{terminalOpen ? <TerminalPanel session={activeSession} /> : null}</div>
@@ -610,7 +635,7 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 
 function InfoRow({ label, value }: { label: string; value: string }): JSX.Element {
   return (
-    <div className="flex items-center justify-between gap-3 rounded-md border border-border bg-background px-3 py-2">
+    <div className="flex items-center justify-between gap-3 rounded-lg border border-border/60 bg-muted/40 px-3 py-2">
       <span className="text-muted-foreground">{label}</span>
       <span className="truncate font-medium">{value}</span>
     </div>
