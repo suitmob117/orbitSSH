@@ -48,7 +48,8 @@ export class SshSessionManager extends EventEmitter {
   constructor(
     private readonly profiles: ProfileStore,
     private readonly credentials: CredentialVault,
-    private readonly history: HistoryStore
+    private readonly history: HistoryStore,
+    private readonly clientFactory: () => Client = () => new Client()
   ) {
     super();
   }
@@ -65,7 +66,7 @@ export class SshSessionManager extends EventEmitter {
     }
 
     const profile = await this.profiles.get(profileId);
-    const client = new Client();
+    const client = this.clientFactory();
     const session: ConnectionSession = {
       id: randomUUID(),
       profileId: profile.id,
