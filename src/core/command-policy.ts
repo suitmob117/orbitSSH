@@ -56,13 +56,16 @@ function stripSudoPrefix(command: string): string {
 
 function isDestructiveRm(command: string): boolean {
   const tokens = command.split(/\s+/);
-  if (tokens[0] !== 'rm') {
+  const rmIndex = tokens.findIndex(
+    (token) => token === 'rm' || (token.startsWith('/') && token.endsWith('/rm'))
+  );
+  if (rmIndex === -1) {
     return false;
   }
 
   let recursive = false;
   let force = false;
-  for (const token of tokens.slice(1)) {
+  for (const token of tokens.slice(rmIndex + 1)) {
     if (token === '--') {
       break;
     }
