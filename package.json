@@ -10,6 +10,7 @@
     "build": "tsc --noEmit && electron-vite build && tsup src/mcp/server.ts --format esm --platform node --target node22 --out-dir dist/mcp --external @napi-rs/keyring --external ssh2 --external @modelcontextprotocol/sdk --external zod",
     "typecheck": "tsc --noEmit",
     "mcp": "tsx src/mcp/server.ts",
+    "mcp:smoke": "node scripts/mcp-smoke.mjs",
     "test": "tsx --test \"tests/**/*.test.ts\"",
     "test:policy": "tsx --test tests/command-policy.test.ts",
     "lint": "tsc --noEmit",
