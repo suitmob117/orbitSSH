@@ -20,6 +20,28 @@ test('complex commands cannot masquerade as readonly commands', () => {
   assert.equal(assessCommand('ls & python mutate.py').risk, 'write');
 });
 
+test('ambiguous readonly-looking commands require approval', () => {
+  const commands = [
+    'find . -delete',
+    'find . -exec /tmp/mutate {} +',
+    'date --set=tomorrow',
+    'journalctl --rotate',
+    'rg --pre mutate pattern',
+    'less -o output.log file'
+  ];
+
+  for (const command of commands) {
+    assert.equal(assessCommand(command).risk, 'write');
+    assert.equal(authorizeCommand('auto_readonly', command).allowed, false);
+  }
+});
+
+test('high risk commands retain their risk in compound syntax', () => {
+  assert.equal(assessCommand('rm -rf /; true').risk, 'high');
+  assert.equal(assessCommand('shutdown -h now && true').risk, 'high');
+  assert.equal(assessCommand('sudo -n rm -rf /tmp/demo').risk, 'high');
+});
+
 test('empty commands are treated as write operations', () => {
   assert.equal(assessCommand('   ').risk, 'write');
 });
