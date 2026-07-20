@@ -11,51 +11,24 @@ export interface AuthorizationDecision extends CommandAssessment {
   allowed: boolean;
 }
 
-const OTHER_HIGH_RISK = /^(?:mkfs\b|dd\s+if=|shutdown\b|reboot\b|userdel\b|passwd\b|visudo\b|iptables\b|ufw\b|firewall-cmd\b|systemctl\s+restart\s+ssh(?:d)?\b)/i;
+const OTHER_HIGH_RISK = /^(?:mkfs(?:\..*)?|shutdown|reboot|userdel|passwd|visudo|iptables|ufw|firewall-cmd)$/i;
 const WRITE_RISK = /\b(rm|mv|cp|chmod|chown|mkdir|touch|tee|sed\s+-i|apt|apt-get|yum|dnf|npm\s+i|pnpm\s+i|docker\s+run|docker\s+compose|systemctl\s+(start|stop|restart|enable|disable))\b/i;
 const READONLY_PREFIX = /^(ls|pwd|cat|head|tail|grep|stat|df|du|free|top|ps|whoami|id|uname|uptime|systemctl\s+status)\b/i;
 const COMPLEX_SHELL_SYNTAX = /(?:\r|\n|&|\|\||[;|<>`]|\$\()/;
-const SUDO_OPTIONS_WITH_VALUE = new Set([
-  '-u',
-  '-g',
-  '-h',
-  '-p',
-  '-r',
-  '-t',
-  '-C',
-  '--user',
-  '--group',
-  '--host',
-  '--prompt',
-  '--role',
-  '--type',
-  '--close-from'
-]);
+const COMMON_EXECUTABLE_PATH = /^\/(?:usr\/)?s?bin\/([^/]+)$/i;
 
-function stripSudoPrefix(command: string): string {
-  const tokens = command.split(/\s+/);
-  if (tokens[0] !== 'sudo') {
-    return command;
-  }
-
-  let index = 1;
-  while (index < tokens.length) {
-    const token = tokens[index];
-    if (token === '--') {
-      index += 1;
-      break;
-    }
-    if (!token.startsWith('-')) {
-      break;
-    }
-    index += SUDO_OPTIONS_WITH_VALUE.has(token) ? 2 : 1;
-  }
-
-  return tokens.slice(index).join(' ');
+function stripBasicQuotes(token: string): string {
+  return token.replace(/^["']+|["']+$/g, '');
 }
 
-function isDestructiveRm(command: string): boolean {
-  const tokens = command.split(/\s+/);
+function executableName(token: string): string | undefined {
+  if (/^[\w.-]+$/.test(token)) {
+    return token;
+  }
+  return COMMON_EXECUTABLE_PATH.exec(token)?.[1];
+}
+
+function isDestructiveRm(tokens: string[]): boolean {
   const rmIndex = tokens.findIndex(
     (token) => token === 'rm' || (token.startsWith('/') && token.endsWith('/rm'))
   );
@@ -81,10 +54,26 @@ function isDestructiveRm(command: string): boolean {
   return recursive && force;
 }
 
+function hasOtherHighRiskCommand(tokens: string[]): boolean {
+  return tokens.some((token, index) => {
+    const executable = executableName(token);
+    if (!executable) {
+      return false;
+    }
+    if (executable === 'dd') {
+      return tokens.slice(index + 1).some((argument) => argument.startsWith('if='));
+    }
+    if (executable === 'systemctl') {
+      return tokens[index + 1] === 'restart' && /^(?:ssh|sshd)$/.test(tokens[index + 2] ?? '');
+    }
+    return OTHER_HIGH_RISK.test(executable);
+  });
+}
+
 function isHighRiskCommand(command: string): boolean {
   return command.split(/&&|\|\||[;|&]/).some((segment) => {
-    const executable = stripSudoPrefix(segment.trim()).replace(/^\/(?:[\w.-]+\/)*/, '');
-    return isDestructiveRm(executable) || OTHER_HIGH_RISK.test(executable);
+    const tokens = segment.trim().split(/\s+/).filter(Boolean).map(stripBasicQuotes);
+    return isDestructiveRm(tokens) || hasOtherHighRiskCommand(tokens);
   });
 }
 

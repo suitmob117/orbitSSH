@@ -52,6 +52,10 @@ test('high risk commands retain their risk in compound syntax', () => {
   assert.equal(assessCommand('command rm -rf /').risk, 'high');
   assert.equal(assessCommand('env rm -rf /').risk, 'high');
   assert.equal(assessCommand('sudo -D /tmp rm -rf /').risk, 'high');
+  assert.equal(assessCommand('command shutdown -h now').risk, 'high');
+  assert.equal(assessCommand('FOO=bar shutdown -h now').risk, 'high');
+  assert.equal(assessCommand('sudo env reboot').risk, 'high');
+  assert.equal(assessCommand("bash -c 'rm -rf /'").risk, 'high');
 });
 
 test('empty commands are treated as write operations', () => {
