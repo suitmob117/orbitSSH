@@ -19,7 +19,7 @@ import {
 import { CredentialVault } from './credential-vault';
 import { HistoryStore } from './history-store';
 import { ProfileStore } from './profile-store';
-import { tail } from './redaction';
+import { redact, tail } from './redaction';
 
 interface ManagedSession {
   session: ConnectionSession;
@@ -139,7 +139,7 @@ export class SshSessionManager extends EventEmitter {
     const stderrTail = tail(result.stderr);
     const record = await this.history.append({
       sessionId,
-      command,
+      command: redact(command),
       startedAt,
       finishedAt,
       exitCode: result.exitCode,

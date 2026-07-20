@@ -15,15 +15,17 @@ class FakeClient extends EventEmitter {
   execCalls = 0;
   sftpCalls = 0;
   readonly operations: string[] = [];
+  readonly executedCommands: string[] = [];
 
   connect(): this {
     queueMicrotask(() => this.emit('ready'));
     return this;
   }
 
-  exec(_command: string, callback: (error: Error | undefined, stream: FakeChannel) => void): void {
+  exec(command: string, callback: (error: Error | undefined, stream: FakeChannel) => void): void {
     this.execCalls += 1;
     this.operations.push('exec');
+    this.executedCommands.push(command);
     const stream = Object.assign(new EventEmitter(), { stderr: new EventEmitter() });
     callback(undefined, stream);
     queueMicrotask(() => {
@@ -59,6 +61,7 @@ class FakeClient extends EventEmitter {
 
 function createHarness(authorizationLevel: AuthorizationLevel) {
   const client = new FakeClient();
+  const historyRecords: Omit<CommandRecord, 'id'>[] = [];
   const profile: ConnectionProfile = {
     id: 'profile-1',
     name: 'Test remote server',
@@ -77,6 +80,7 @@ function createHarness(authorizationLevel: AuthorizationLevel) {
   const history = {
     append: async (record: Omit<CommandRecord, 'id'>): Promise<CommandRecord> => {
       client.operations.push('history');
+      historyRecords.push(record);
       return { id: 'record-1', ...record };
     }
   } as unknown as HistoryStore;
@@ -87,7 +91,7 @@ function createHarness(authorizationLevel: AuthorizationLevel) {
     () => client as unknown as Client
   );
 
-  return { client, manager, authorizationLevel };
+  return { client, historyRecords, manager, authorizationLevel };
 }
 
 test('auto readonly rejects writes before remote execution and history recording', async () => {
@@ -146,6 +150,18 @@ test('auto readonly allows readonly commands and downloads through remote interf
   assert.equal(harness.client.execCalls, 1);
   assert.equal(harness.client.sftpCalls, 1);
   assert.deepEqual(harness.client.operations, ['exec', 'history', 'sftp']);
+});
+
+test('command secrets are redacted from history without changing remote execution', async () => {
+  const harness = createHarness('ask_every_time');
+  const session = await harness.manager.openSession('profile-1', harness.authorizationLevel);
+  const command = 'echo password=hunter2';
+
+  const result = await harness.manager.runCommand(session.id, command);
+
+  assert.deepEqual(harness.client.executedCommands, [command]);
+  assert.equal(harness.historyRecords[0]?.command, 'echo password=[REDACTED]');
+  assert.equal(result.record.command, 'echo password=[REDACTED]');
 });
 
 for (const authorizationLevel of ['ask_every_time', 'trusted_session'] as const) {
