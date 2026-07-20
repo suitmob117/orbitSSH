@@ -130,8 +130,8 @@ export class SshSessionManager extends EventEmitter {
       throw new Error('连接会话已断开，请重新连接');
     }
 
-    const startedAt = new Date().toISOString();
     enforceCommandAuthorization(managed.session.authorizationLevel, command);
+    const startedAt = new Date().toISOString();
     const result = await this.execRaw(managed.client, command);
     const finishedAt = new Date().toISOString();
     const stdoutTail = tail(result.stdout);
@@ -157,8 +157,8 @@ export class SshSessionManager extends EventEmitter {
 
   async transferFile(request: FileTransferRequest): Promise<FileTransferResult> {
     const managed = this.getManaged(request.sessionId);
-    const startedAt = new Date().toISOString();
     enforceTransferAuthorization(managed.session.authorizationLevel, request.direction);
+    const startedAt = new Date().toISOString();
 
     await new Promise<void>((resolve, reject) => {
       managed.client.sftp((error, sftp) => {
