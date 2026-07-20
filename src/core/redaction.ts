@@ -1,8 +1,20 @@
 const SECRET_PATTERNS: { pattern: RegExp; replacement: string }[] = [
-  { pattern: /(password\s*[=:]\s*)[^\s'"`]+/gi, replacement: '$1[REDACTED]' },
-  { pattern: /(token\s*[=:]\s*)[^\s'"`]+/gi, replacement: '$1[REDACTED]' },
-  { pattern: /(api[_-]?key\s*[=:]\s*)[^\s'"`]+/gi, replacement: '$1[REDACTED]' },
-  { pattern: /(secret\s*[=:]\s*)[^\s'"`]+/gi, replacement: '$1[REDACTED]' },
+  {
+    pattern: /((?:"password"|'password'|password)\s*[=:]\s*)(?:(["'])(?:\\.|[^\\])*?\2|[^\s'"`]+)/gi,
+    replacement: '$1$2[REDACTED]$2'
+  },
+  {
+    pattern: /((?:"token"|'token'|token)\s*[=:]\s*)(?:(["'])(?:\\.|[^\\])*?\2|[^\s'"`]+)/gi,
+    replacement: '$1$2[REDACTED]$2'
+  },
+  {
+    pattern: /((?:"api[_-]?key"|'api[_-]?key'|api[_-]?key)\s*[=:]\s*)(?:(["'])(?:\\.|[^\\])*?\2|[^\s'"`]+)/gi,
+    replacement: '$1$2[REDACTED]$2'
+  },
+  {
+    pattern: /((?:"secret"|'secret'|secret)\s*[=:]\s*)(?:(["'])(?:\\.|[^\\])*?\2|[^\s'"`]+)/gi,
+    replacement: '$1$2[REDACTED]$2'
+  },
   {
     pattern: /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g,
     replacement: '[REDACTED]'

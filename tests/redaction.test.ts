@@ -12,6 +12,22 @@ test('redacts password, token, and API key values', () => {
   assert.equal((output.match(/\[REDACTED\]/g) ?? []).length, 3);
 });
 
+test('redacts quoted password and token values while preserving their quotes', () => {
+  assert.equal(redact('password="hunter2"'), 'password="[REDACTED]"');
+  assert.equal(redact("token='abc123'"), "token='[REDACTED]'");
+});
+
+test('redacts JSON password and API key values while preserving JSON structure', () => {
+  assert.equal(
+    redact('{"password":"hunter2","api_key":"abc123"}'),
+    '{"password":"[REDACTED]","api_key":"[REDACTED]"}'
+  );
+});
+
+test('redacts quoted values containing basic escaped characters', () => {
+  assert.equal(redact('password="hunter\\"2"'), 'password="[REDACTED]"');
+});
+
 test('redacts an entire private key block', () => {
   const privateKey = '-----BEGIN PRIVATE KEY-----\nsecret\n-----END PRIVATE KEY-----';
 
