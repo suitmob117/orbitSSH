@@ -24,6 +24,24 @@ test('redacts JSON password and API key values while preserving JSON structure',
   );
 });
 
+test('redacts common JSON authentication secrets while preserving JSON structure', () => {
+  assert.equal(
+    redact('{"access_token":"abc","refresh_token":"def","client_secret":"ghi"}'),
+    '{"access_token":"[REDACTED]","refresh_token":"[REDACTED]","client_secret":"[REDACTED]"}'
+  );
+});
+
+test('redacts a Bearer token while preserving the Authorization header', () => {
+  assert.equal(
+    redact('Authorization: Bearer abc.def-123'),
+    'Authorization: Bearer [REDACTED]'
+  );
+});
+
+test('redacts the entire Cookie header value', () => {
+  assert.equal(redact('Cookie: session=abc; csrf=def'), 'Cookie: [REDACTED]');
+});
+
 test('redacts quoted values containing basic escaped characters', () => {
   assert.equal(redact('password="hunter\\"2"'), 'password="[REDACTED]"');
 });
