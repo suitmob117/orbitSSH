@@ -17,6 +17,7 @@ test('complex commands cannot masquerade as readonly commands', () => {
   assert.equal(assessCommand('cat $(echo /etc/passwd)').risk, 'write');
   assert.equal(assessCommand('cat file > copy').risk, 'write');
   assert.equal(assessCommand('pwd\nuname -a').risk, 'write');
+  assert.equal(assessCommand('ls & python mutate.py').risk, 'write');
 });
 
 test('empty commands are treated as write operations', () => {
@@ -27,6 +28,7 @@ test('auto readonly sessions allow only explicit readonly commands', () => {
   assert.equal(authorizeCommand('auto_readonly', 'df -h').allowed, true);
   assert.equal(authorizeCommand('auto_readonly', 'mkdir /tmp/demo').allowed, false);
   assert.equal(authorizeCommand('auto_readonly', 'ls && python mutate.py').allowed, false);
+  assert.equal(authorizeCommand('auto_readonly', 'ls & python mutate.py').allowed, false);
 });
 
 test('client-approved sessions allow write commands', () => {

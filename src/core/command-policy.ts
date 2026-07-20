@@ -14,7 +14,7 @@ export interface AuthorizationDecision extends CommandAssessment {
 const HIGH_RISK = /\b(rm\s+-rf|mkfs|dd\s+if=|shutdown|reboot|userdel|passwd|visudo|iptables|ufw|firewall-cmd|systemctl\s+restart\s+ssh|systemctl\s+restart\s+sshd)\b/i;
 const WRITE_RISK = /\b(rm|mv|cp|chmod|chown|mkdir|touch|tee|sed\s+-i|apt|apt-get|yum|dnf|npm\s+i|pnpm\s+i|docker\s+run|docker\s+compose|systemctl\s+(start|stop|restart|enable|disable))\b/i;
 const READONLY_PREFIX = /^(ls|pwd|cat|less|head|tail|grep|rg|find|stat|df|du|free|top|ps|whoami|id|uname|uptime|date|systemctl\s+status|journalctl)\b/i;
-const COMPLEX_SHELL_SYNTAX = /(?:\r|\n|&&|\|\||[;|<>`]|\$\()/;
+const COMPLEX_SHELL_SYNTAX = /(?:\r|\n|&|\|\||[;|<>`]|\$\()/;
 
 export function assessCommand(command: string): CommandAssessment {
   const trimmed = command.trim();
