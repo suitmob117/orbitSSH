@@ -4,7 +4,9 @@ import test from 'node:test';
 import {
   assessCommand,
   authorizeCommand,
-  authorizeTransfer
+  authorizeTransfer,
+  enforceCommandAuthorization,
+  enforceTransferAuthorization
 } from '../src/core/command-policy';
 
 test('识别单条明确的只读命令', () => {
@@ -72,4 +74,20 @@ test('auto readonly sessions allow downloads but deny uploads', () => {
   assert.equal(authorizeTransfer('auto_readonly', 'download').allowed, true);
   assert.equal(authorizeTransfer('auto_readonly', 'upload').allowed, false);
   assert.equal(authorizeTransfer('ask_every_time', 'upload').allowed, true);
+});
+
+test('auto readonly sessions enforce command authorization', () => {
+  assert.throws(
+    () => enforceCommandAuthorization('auto_readonly', 'mkdir /tmp/demo'),
+    /当前会话为“只读自动”/
+  );
+  assert.doesNotThrow(() => enforceCommandAuthorization('auto_readonly', 'df -h'));
+});
+
+test('auto readonly sessions enforce transfer authorization', () => {
+  assert.throws(
+    () => enforceTransferAuthorization('auto_readonly', 'upload'),
+    /已拒绝文件上传/
+  );
+  assert.doesNotThrow(() => enforceTransferAuthorization('auto_readonly', 'download'));
 });

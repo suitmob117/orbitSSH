@@ -130,3 +130,27 @@ export function authorizeTransfer(
     allowed: authorizationLevel !== 'auto_readonly' || readonly
   };
 }
+
+export function enforceCommandAuthorization(
+  authorizationLevel: AuthorizationLevel,
+  command: string
+): void {
+  const authorization = authorizeCommand(authorizationLevel, command);
+  if (!authorization.allowed) {
+    throw new Error(
+      `当前会话为“只读自动”，已拒绝 ${authorization.risk} 操作：${authorization.reason}`
+    );
+  }
+}
+
+export function enforceTransferAuthorization(
+  authorizationLevel: AuthorizationLevel,
+  direction: 'upload' | 'download'
+): void {
+  const authorization = authorizeTransfer(authorizationLevel, direction);
+  if (!authorization.allowed) {
+    throw new Error(
+      `当前会话为“只读自动”，已拒绝文件${direction === 'upload' ? '上传' : '下载'}：${authorization.reason}`
+    );
+  }
+}

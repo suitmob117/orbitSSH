@@ -11,7 +11,11 @@ import type {
   FileTransferResult,
   TerminalChunk
 } from '../shared/types';
-import { assessCommand } from './command-policy';
+import {
+  assessCommand,
+  enforceCommandAuthorization,
+  enforceTransferAuthorization
+} from './command-policy';
 import { CredentialVault } from './credential-vault';
 import { HistoryStore } from './history-store';
 import { ProfileStore } from './profile-store';
@@ -127,6 +131,7 @@ export class SshSessionManager extends EventEmitter {
     }
 
     const startedAt = new Date().toISOString();
+    enforceCommandAuthorization(managed.session.authorizationLevel, command);
     const result = await this.execRaw(managed.client, command);
     const finishedAt = new Date().toISOString();
     const stdoutTail = tail(result.stdout);
@@ -153,6 +158,7 @@ export class SshSessionManager extends EventEmitter {
   async transferFile(request: FileTransferRequest): Promise<FileTransferResult> {
     const managed = this.getManaged(request.sessionId);
     const startedAt = new Date().toISOString();
+    enforceTransferAuthorization(managed.session.authorizationLevel, request.direction);
 
     await new Promise<void>((resolve, reject) => {
       managed.client.sftp((error, sftp) => {
