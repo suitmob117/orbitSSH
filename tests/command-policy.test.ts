@@ -40,6 +40,11 @@ test('high risk commands retain their risk in compound syntax', () => {
   assert.equal(assessCommand('rm -rf /; true').risk, 'high');
   assert.equal(assessCommand('shutdown -h now && true').risk, 'high');
   assert.equal(assessCommand('sudo -n rm -rf /tmp/demo').risk, 'high');
+  assert.equal(assessCommand('rm -fr /').risk, 'high');
+  assert.equal(assessCommand('rm -r -f /').risk, 'high');
+  assert.equal(assessCommand('rm --recursive --force /').risk, 'high');
+  assert.equal(assessCommand('sudo -- rm -rf /').risk, 'high');
+  assert.equal(assessCommand('sudo -u root -- rm -rf /').risk, 'high');
 });
 
 test('empty commands are treated as write operations', () => {
