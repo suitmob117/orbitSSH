@@ -1,55 +1,299 @@
-# Codex MCP Integration Design
+# AI SSH Windows 桌面应用、MCP 与 Codex Plugin 一体化设计
 
-## Goal
+## 一、产品定位
 
-Register AI SSH as a local Codex MCP server while ensuring the server-side authorization level is not merely descriptive. The integration must use the production build, retain the operating-system credential vault, and expose only the intended MCP tools.
+AI SSH 是一款面向 Windows 的 AI 原生 SSH 桌面工具，同时服务两类操作方式：
 
-## Scope
+- 用户通过图形化界面完成日常服务器连接、终端操作、文件传输和历史查看；
+- Codex 通过 Plugin 和本地 MCP Runtime，复用相同的连接配置、安全策略与凭据引用，在用户可见且可控的范围内操作服务器。
 
-This change covers:
+桌面应用是产品主体，MCP 是向本地 AI 客户端开放的受控工具接口，Codex Plugin 负责安装引导、操作规范和能力发现。Plugin 不替代 MCP，MCP 也不依赖桌面界面常驻。
 
-- server-side enforcement for `auto_readonly` connection sessions;
-- conservative command classification for automatic read-only execution;
-- matching enforcement for file transfers;
-- a production MCP build and Codex MCP registration;
-- automated policy tests and an end-to-end MCP smoke test.
+## 二、首版目标与范围
 
-It does not add new SSH authentication methods, jump-host support, remote HTTP transport, or a new user interface.
+首个正式版本只支持 Windows x64，交付一个一体化安装包，包含：
 
-## Authorization Behavior
+- AI SSH 桌面应用；
+- 可由 Codex 按需启动的独立 MCP Runtime；
+- AI SSH Codex Plugin；
+- 本地 Codex Plugin Marketplace 清单；
+- 安装、诊断、修复、更新和卸载能力。
 
-AI SSH remains responsible for enforcing the session authorization boundary. Codex remains responsible for asking the operator to approve MCP tool calls.
+首版不包含 macOS、Linux、远程 HTTP MCP、云端账号体系和移动端应用。跳板机、多设备同步等能力不作为本次核心交付目标。
 
-- `auto_readonly`: the server accepts commands classified as read-only, accepts downloads, and rejects commands with ambiguous or write behavior and all uploads.
-- `ask_every_time`: the server accepts the requested action after Codex has approved the MCP tool call. The Codex configuration therefore keeps command execution and file transfer tools in prompt mode.
-- `trusted_session`: the server accepts commands and transfers after the operator explicitly opens a trusted session.
+## 三、总体架构
 
-Automatic read-only classification is deliberately conservative. Commands containing shell chaining, pipelines, command substitution, redirection, or newlines are treated as non-read-only even if their first token looks harmless. This avoids a partial shell parser and prevents a safe-looking prefix from hiding a write operation.
+```text
+Windows 安装包
+├─ AI SSH 桌面应用
+│  ├─ 服务器与分组管理
+│  ├─ 会话终端
+│  ├─ 文件传输
+│  ├─ AI 操作与审批可视化
+│  ├─ 历史与恢复点
+│  └─ Codex 集成管理
+├─ AI SSH MCP Runtime
+│  ├─ 连接配置查询
+│  ├─ SSH 会话生命周期
+│  ├─ 命令风险与授权执行
+│  ├─ 有边界的文件传输
+│  └─ 健康检查与历史记录
+└─ AI SSH Codex Plugin
+   ├─ 中文 SSH 操作 Skill
+   ├─ MCP 注册信息
+   ├─ 安全操作规范
+   └─ 安装与诊断说明
 
-Rejected actions return a clear error before opening an SSH command channel or starting an SFTP transfer.
+共享本地数据
+├─ SQLite：配置、策略、历史和集成状态
+└─ Windows 凭据管理器：密码和私钥口令
+```
 
-## Components
+桌面应用和 MCP Runtime 可以同时运行，但不跨进程共享 SSH Socket。每个进程在自身生命周期内复用连接，从而避免引入复杂且脆弱的连接代理。
 
-`src/core/command-policy.ts` owns pure authorization decisions. It will expose policy checks that combine the existing risk assessment with the selected authorization level and transfer direction.
+## 四、安装与首次启动
 
-`src/core/ssh-session-manager.ts` applies those checks at the execution boundary before calling SSH or SFTP.
+Windows 安装包采用 NSIS，普通用户不需要预装 Node.js。首次启动流程如下：
 
-Tests exercise the pure policy functions using Node's built-in test runner so the project does not need another test framework. Package scripts provide focused and full test commands.
+1. 检查 Windows 凭据管理器、SSH 环境和 Codex CLI；
+2. 引导用户创建或导入服务器连接配置；
+3. 展示“启用 Codex 集成”，由用户主动确认；
+4. 备份当前 Codex 配置；
+5. 通过 Codex 官方命令注册安装包内的本地 Marketplace；
+6. 安装 AI SSH Plugin 并注册 MCP Runtime 的绝对路径；
+7. 调用 `list_connection_profiles` 完成端到端自检；
+8. 在图形界面中展示安装结果和修复入口。
 
-The Codex configuration launches the built `dist/mcp/server.js` with the current Node executable. The configuration enables only profile listing, session lifecycle, health, command execution, and bounded upload/download tools. Read-only discovery and health tools may run automatically; connection creation, commands, transfers, and session closure require MCP approval.
+未安装 Codex 时不影响桌面 SSH 功能。用户后续安装 Codex 后，可以随时从设置页启用集成。
 
-## Error Handling
+Codex 配置失败时恢复备份，不让失败的集成配置影响桌面应用。安装目录变化后，修复功能重新注册 MCP Runtime 的绝对路径。
 
-Policy rejection errors identify the authorization level and explain that the operator must use an appropriately approved session. No remote action is attempted after rejection.
+## 五、后台运行模型
 
-Build or MCP startup failures leave the existing Codex configuration untouched. Before registration, the current Codex configuration is backed up. Registration is verified through Codex's MCP listing and by calling `list_connection_profiles` through the built stdio server.
+- 桌面应用关闭后，Codex 仍可启动 MCP Runtime；
+- MCP Runtime 由 Codex 按需启动，没有调用时不常驻；
+- 桌面应用和 MCP 使用同一份连接配置、策略和凭据引用；
+- MCP Runtime 不启动 Electron，也不依赖图形界面进程；
+- 运行中的旧 MCP 会话完成后，后续会话再使用更新后的 Runtime。
 
-## Verification
+## 六、本地数据与迁移
 
-The implementation is complete only when all of the following pass freshly:
+当前 JSON 存储不适合桌面应用和 MCP 并发写入。重新设计后，非敏感数据迁移到本地 SQLite，并启用 WAL 模式。
 
-1. Policy tests demonstrate read-only acceptance and ambiguous/write rejection, including compound commands and upload/download behavior.
-2. Type checking passes.
-3. The full production build succeeds.
-4. Codex parses and lists the `ai_ssh` MCP entry.
-5. A real MCP client starts the production server and successfully calls `list_connection_profiles` without exposing stored secret values.
+SQLite 保存：
+
+- 服务器连接配置、分组和标签；
+- AI 访问开关和授权策略；
+- 会话状态摘要；
+- 命令和文件传输历史；
+- 恢复点信息；
+- Plugin 与 MCP 安装状态；
+- 应用设置。
+
+密码、私钥口令和其他认证秘密继续存放在 Windows 凭据管理器。SQLite 只保存凭据引用，不保存凭据内容。
+
+首次升级自动把现有 `profiles.json` 和 `history.json` 迁移到 SQLite。迁移在事务中执行，完成校验后才切换；原 JSON 文件以只读备份形式保留，失败则继续使用旧数据且不删除原文件。
+
+## 七、连接会话与并发规则
+
+- 同一进程内复用已认证的 SSH 长连接；
+- 同一服务器允许并行执行只读操作；
+- 写操作进入服务器级串行队列，避免多个 AI 操作同时修改同一目标；
+- 正在使用的连接配置不能直接删除，只能先停用；
+- 网络中断后可以重试只读操作，不自动重放写操作；
+- 应用异常退出后，未完成任务标记为“已中断”，不误报成功；
+- 每条历史记录标明来源：图形界面、Codex MCP 或手动终端。
+
+用户可以单独禁止某台服务器被 AI 使用，而不影响图形界面的手动连接。
+
+## 八、SSH 服务器身份验证
+
+首次连接时保存 SSH 主机指纹。后续连接必须与已保存指纹一致。
+
+指纹变化时：
+
+- 立即中止连接；
+- MCP 不允许自动接受新指纹；
+- 图形界面展示新旧指纹和风险说明；
+- 只有用户在图形界面重新授权后才更新记录。
+
+该机制用于防止 DNS 劫持和中间人服务器冒充目标服务器。
+
+## 九、每台服务器的 AI 权限
+
+新建连接默认关闭 AI 访问。启用后可以配置：
+
+- 是否允许 AI 连接；
+- 默认授权等级；
+- 允许访问的远程目录；
+- 是否允许上传和下载；
+- 是否允许使用 sudo；
+- 可信会话有效期；
+- 本地文件允许访问范围。
+
+授权等级定义如下：
+
+- `只读自动`：只允许严格白名单中的单条只读命令和文件下载；
+- `每次询问`：Codex 展示具体操作，用户批准后执行；
+- `可信会话`：用户明确开启并设置有效期，到期后自动降级；
+- `高危操作`：不受普通可信会话自动放行，仍需单独确认。
+
+当前实现中 `authorizationLevel` 只记录风险但没有强制执行。正式接入前必须在 MCP 服务端执行授权判断，拒绝发生在 SSH 命令通道或 SFTP 传输开始之前。
+
+## 十、命令风险控制
+
+自动只读判断采用保守策略。包含以下结构的命令不能被判定为自动只读：
+
+- 管道；
+- 重定向；
+- 命令替换；
+- 多条命令或换行；
+- 无法准确识别的 Shell 表达式。
+
+以下操作标记为高危：
+
+- 大量删除或覆盖文件；
+- 磁盘格式化、分区和挂载修改；
+- 防火墙、SSH 服务和用户权限修改；
+- 重启和关机；
+- 数据库删除和不可逆迁移；
+- 覆盖生产配置、密钥或证书；
+- 删除 Docker 数据卷；
+- 下载并直接执行远程脚本。
+
+高危审批必须展示完整命令、目标服务器、工作目录、风险原因、预计影响和恢复方式。没有可验证恢复方案的操作可以被策略直接禁止。
+
+## 十一、文件传输安全
+
+- MCP 只能读取用户授权的本地目录；
+- 下载只能写入专用目录或用户明确授权的位置；
+- 上传先写入远程临时文件，校验后原子替换；
+- 覆盖已有文件前创建备份或要求确认；
+- 解析后的路径必须仍在允许目录内；
+- 防止通过 `../`、符号链接或大小写差异绕过目录边界；
+- `只读自动`允许下载，但禁止上传。
+
+## 十二、凭据、历史与脱敏
+
+- 密码和私钥口令只进入 Windows 凭据管理器；
+- MCP 工具返回值不包含秘密内容；
+- 命令、输出和错误在落盘前统一脱敏；
+- 过滤疑似 Token、密码、Cookie、私钥和连接字符串；
+- 用户可以关闭命令输出保存，只记录时间、结果与摘要；
+- 历史记录支持可配置的保留周期；
+- 完整密码、私钥、Token 和 Cookie 永不写入历史。
+
+## 十三、恢复点与故障处理
+
+- 写操作可以关联配置备份、数据库备份或远程文件副本；
+- 历史记录保存恢复点位置和回滚结果；
+- 不可逆数据迁移执行前必须创建并验证备份；
+- MCP 启动失败不影响桌面应用；
+- Plugin 安装失败时恢复 Codex 配置；
+- 应用启动后提示检查上次未完成任务，不自动继续执行。
+
+## 十四、Codex Plugin 设计
+
+仓库内维护 AI SSH Plugin 与本地 Marketplace 清单。
+
+Plugin 包含：
+
+- 面向 Codex 的中文 SSH 操作 Skill；
+- MCP Runtime 注册与工具声明；
+- 服务器操作安全规范；
+- 常见故障诊断和修复说明；
+- 与桌面应用、MCP Runtime 对应的兼容版本信息。
+
+安装包携带与当前桌面应用匹配的 Plugin。公开 GitHub 仓库也可以作为 Codex Marketplace 来源，便于传播和独立查看；如果本机没有 MCP Runtime，Plugin 给出明确安装提示，而不是静默失败。
+
+## 十五、发布与更新
+
+首版通过 GitHub Releases 发布 Windows x64 安装包、SHA-256 校验值和中文更新说明。正式版使用 Windows 代码签名；未取得证书前只能作为测试版，并明确提示 SmartScreen 风险。
+
+更新流程：
+
+1. 验证更新签名和 SHA-256；
+2. 备份 SQLite、Codex 配置和 Plugin 状态；
+3. 等待运行中的 SSH 写操作结束或由用户确认中断；
+4. 安装桌面应用、MCP Runtime 和 Plugin；
+5. 验证数据库迁移、MCP 启动与 Plugin 加载；
+6. 验证失败时恢复旧程序、数据库和配置。
+
+后续可以增加 Winget 发布，首版不以此作为阻塞条件。
+
+## 十六、卸载
+
+卸载时提供三种选项：
+
+1. 仅卸载桌面应用，保留独立 MCP Runtime、Codex 集成和本地数据；
+2. 卸载桌面应用、MCP Runtime 与 Codex 集成，保留服务器配置和历史；
+3. 完全卸载，包括 Plugin、MCP 注册、SQLite 和 Windows 凭据。
+
+默认选择第 2 项，避免 Codex 留下失效路径，同时防止误删服务器配置。
+
+## 十七、图形界面方向
+
+界面采用已确认的“未来感 AI 协作工作台”方案 B，并提供深色与浅色两套完整主题。
+
+核心布局：
+
+- 左侧为服务器星图、分组和连接状态；
+- 中央为沉浸式终端与多会话工作区；
+- 右侧为 AI 操作时间线、审批卡和验证结果；
+- 底部或常驻区域显示授权等级、允许目录、凭据保护与历史脱敏状态。
+
+深色主题使用深空黑、青绿冷光和细颗粒网格，作为默认主题，突出 AI 原生定位。
+
+浅色主题使用冰雾白多层表面、蓝灰阴影和半透明材质。终端保留深色嵌入式专注区，连接、安全和审批分别使用青色、绿色和琥珀色。浅色主题不是简单反色。
+
+产品支持跟随 Windows 系统主题，也允许用户手动指定深色或浅色。
+
+视觉稿：
+
+- `ai-ssh-ai-future.html`：深色主题；
+- `ai-ssh-ai-future-light.html`：浅色主题。
+
+## 十八、测试策略
+
+新增功能和缺陷修复采用测试驱动方式实施。
+
+自动化验证至少覆盖：
+
+- 命令风险分类和授权等级强制执行；
+- 复合命令不能绕过自动只读策略；
+- 上传、下载和目录边界；
+- SSH 主机指纹首次信任与变化阻断；
+- JSON 到 SQLite 的迁移与失败恢复；
+- 多进程并发写入；
+- 敏感信息脱敏；
+- Plugin 安装、诊断、修复和卸载；
+- MCP 生产构建和真实 stdio 调用；
+- Windows 安装、升级、回滚和卸载。
+
+## 十九、首版验收标准
+
+桌面应用必须满足：
+
+- 新增、编辑、停用和删除连接配置；
+- 支持密码、私钥和 SSH Agent；
+- 验证并记住 SSH 主机指纹；
+- 提供终端、命令执行、文件传输和历史记录；
+- 图形界面关闭后不影响 MCP 使用；
+- 深浅主题均可正常使用。
+
+Codex 集成必须满足：
+
+- 一键检测、安装、诊断、修复和卸载 Plugin/MCP；
+- Codex 可以列出授权服务器，但无法读取秘密；
+- 服务端真正执行 AI 开关、授权等级和文件范围；
+- MCP 支持连接、健康检查、命令和文件传输；
+- 高危操作不能绕过审批。
+
+稳定性和数据必须满足：
+
+- 桌面应用和 MCP 并发运行不会覆盖数据；
+- 旧 JSON 数据能够安全迁移到 SQLite；
+- 更新失败能够恢复旧版本；
+- 数据库迁移和恢复点经过完整性校验；
+- 历史输出通过敏感信息测试；
+- 安装、升级、修复和卸载均有可重复验证流程。
