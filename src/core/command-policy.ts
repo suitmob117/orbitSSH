@@ -26,7 +26,24 @@ const WRITE_RISK_EXECUTABLES = new Set([
   'yum',
   'dnf'
 ]);
-const READONLY_PREFIX = /^(ls|pwd|cat|head|tail|grep|stat|df|du|free|top|ps|whoami|id|uname|uptime|systemctl\s+status|command\s+-(?:v|V))\b/i;
+const READONLY_EXECUTABLES = new Set([
+  'ls',
+  'pwd',
+  'cat',
+  'head',
+  'tail',
+  'grep',
+  'stat',
+  'df',
+  'du',
+  'free',
+  'top',
+  'ps',
+  'whoami',
+  'id',
+  'uname',
+  'uptime'
+]);
 const COMPLEX_SHELL_SYNTAX = /(?:\r|\n|&|\|\||[;|<>`]|\$\()/;
 const COMMON_EXECUTABLE_PATH = /^\/(?:usr\/)?s?bin\/([^/]+)$/i;
 const ENVIRONMENT_ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
@@ -52,6 +69,27 @@ const SUDO_OPTIONS_WITH_VALUE = new Set([
   '--chdir'
 ]);
 const ENV_OPTIONS_WITH_VALUE = new Set(['-u', '-C', '--unset', '--chdir']);
+const SYSTEMCTL_OPTIONS_WITH_VALUE = new Set([
+  '-H',
+  '-M',
+  '-t',
+  '-p',
+  '-s',
+  '--host',
+  '--machine',
+  '--type',
+  '--state',
+  '--property',
+  '--job-mode',
+  '--root',
+  '--image',
+  '--image-policy',
+  '--preset-mode',
+  '--kill-who',
+  '--signal',
+  '--what',
+  '--uid'
+]);
 
 interface ParsedShellCommand {
   executable: string;
@@ -204,6 +242,53 @@ function parseActualCommand(tokens: string[]): ParsedShellCommand | undefined {
   return undefined;
 }
 
+function systemctlCommand(args: string[]): ParsedShellCommand | undefined {
+  let index = 0;
+  while (index < args.length) {
+    const token = args[index];
+    if (token === '--') {
+      index += 1;
+      break;
+    }
+    if (!token.startsWith('-') || token === '-') {
+      break;
+    }
+
+    const optionName = token.split('=', 1)[0];
+    if (SYSTEMCTL_OPTIONS_WITH_VALUE.has(optionName) && !token.includes('=')) {
+      if (index + 1 >= args.length || args[index + 1].startsWith('-')) {
+        return undefined;
+      }
+      index += 2;
+    } else {
+      index += 1;
+    }
+  }
+
+  const executable = args[index]?.toLowerCase();
+  return executable ? { executable, args: args.slice(index + 1) } : undefined;
+}
+
+function isReadonlyCommand(command: string): boolean {
+  const tokens = tokenizeShellSegment(command);
+  const executable = executableName(tokens[0] ?? '');
+  if (!executable) {
+    return false;
+  }
+
+  const args = tokens.slice(1);
+  if (READONLY_EXECUTABLES.has(executable)) {
+    return true;
+  }
+  if (executable === 'command') {
+    return args[0] === '-v' || args[0] === '-V';
+  }
+  if (executable === 'systemctl') {
+    return systemctlCommand(args)?.executable === 'status';
+  }
+  return false;
+}
+
 function isDestructiveRm(command: ParsedShellCommand): boolean {
   if (command.executable !== 'rm') {
     return false;
@@ -232,7 +317,10 @@ function hasOtherHighRiskCommand(command: ParsedShellCommand): boolean {
     return command.args.some((argument) => argument.startsWith('if='));
   }
   if (command.executable === 'systemctl') {
-    return command.args[0] === 'restart' && /^(?:ssh|sshd)$/.test(command.args[1] ?? '');
+    const systemctl = systemctlCommand(command.args);
+    return (
+      systemctl?.executable === 'restart' && /^(?:ssh|sshd)$/.test(systemctl.args[0] ?? '')
+    );
   }
   return OTHER_HIGH_RISK.test(command.executable);
 }
@@ -290,7 +378,10 @@ function isWriteRiskCommand(command: string, shellDepth = 0): boolean {
       return parsed.args[0] === 'run' || parsed.args[0] === 'compose';
     }
     if (parsed.executable === 'systemctl') {
-      return ['start', 'stop', 'restart', 'enable', 'disable'].includes(parsed.args[0] ?? '');
+      const systemctl = systemctlCommand(parsed.args);
+      return ['start', 'stop', 'restart', 'enable', 'disable'].includes(
+        systemctl?.executable ?? ''
+      );
     }
     return false;
   });
@@ -313,7 +404,7 @@ export function assessCommand(command: string): CommandAssessment {
   if (isWriteRiskCommand(trimmed)) {
     return { risk: 'write', reason: '命令可能修改远程服务器状态' };
   }
-  if (READONLY_PREFIX.test(trimmed)) {
+  if (isReadonlyCommand(trimmed)) {
     return { risk: 'readonly', reason: '命令属于明确的单条只读检查' };
   }
   return { risk: 'write', reason: '无法确认命令只读，按写操作处理' };
@@ -326,7 +417,10 @@ export function authorizeCommand(
   const assessment = assessCommand(command);
   return {
     ...assessment,
-    allowed: authorizationLevel !== 'auto_readonly' || assessment.risk === 'readonly'
+    allowed:
+      authorizationLevel === 'ask_every_time' ||
+      (authorizationLevel === 'auto_readonly' && assessment.risk === 'readonly') ||
+      (authorizationLevel === 'trusted_session' && assessment.risk !== 'high')
   };
 }
 
@@ -348,9 +442,10 @@ export function enforceCommandAuthorization(
 ): void {
   const authorization = authorizeCommand(authorizationLevel, command);
   if (!authorization.allowed) {
-    throw new Error(
-      `当前会话为“只读自动”，已拒绝 ${authorization.risk} 操作：${authorization.reason}`
-    );
+    if (authorizationLevel === 'trusted_session') {
+      throw new Error(`高危操作仍需逐次审批，请切换到“每次询问”后重试：${authorization.reason}`);
+    }
+    throw new Error(`当前会话为“只读自动”，已拒绝 ${authorization.risk} 操作：${authorization.reason}`);
   }
 }
 

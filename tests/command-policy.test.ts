@@ -22,6 +22,15 @@ test('complex commands cannot masquerade as readonly commands', () => {
   assert.equal(assessCommand('ls & python mutate.py').risk, 'write');
 });
 
+test('environment assignments and executable lookalikes cannot masquerade as readonly commands', () => {
+  const commands = ['ls=shadowed python mutate.py', 'cat=x sh /tmp/mutate.sh', 'ps=x ./mutate'];
+
+  for (const command of commands) {
+    assert.equal(assessCommand(command).risk, 'write');
+    assert.equal(authorizeCommand('auto_readonly', command).allowed, false);
+  }
+});
+
 test('readonly command arguments are not treated as executables', () => {
   const commands = ['grep passwd /etc/passwd', 'grep reboot notes.txt', 'ls shutdown'];
 
@@ -37,6 +46,28 @@ test('readonly lookup and search commands do not treat arguments as writes or ex
     'grep mkdir notes.txt',
     'command -v shutdown',
     'command -V reboot'
+  ];
+
+  for (const command of commands) {
+    assert.equal(assessCommand(command).risk, 'readonly');
+    assert.equal(authorizeCommand('auto_readonly', command).allowed, true);
+  }
+});
+
+test('readonly classification requires an unwrapped executable in the original command position', () => {
+  const commands = ['FOO=bar ls', 'env ls', 'sudo ls', 'command ls'];
+
+  for (const command of commands) {
+    assert.equal(assessCommand(command).risk, 'write');
+    assert.equal(authorizeCommand('auto_readonly', command).allowed, false);
+  }
+});
+
+test('systemctl status remains readonly after leading readonly options', () => {
+  const commands = [
+    'systemctl --no-pager status ssh',
+    'systemctl --quiet status sshd',
+    'systemctl --host=example.test status ssh'
   ];
 
   for (const command of commands) {
@@ -81,6 +112,15 @@ test('high risk commands retain their risk in compound syntax', () => {
   assert.equal(assessCommand("bash -c 'rm -rf /'").risk, 'high');
 });
 
+test('systemctl options do not hide high risk SSH restarts', () => {
+  const commands = ['systemctl --no-pager restart ssh', 'systemctl --quiet restart sshd'];
+
+  for (const command of commands) {
+    assert.equal(assessCommand(command).risk, 'high');
+    assert.equal(authorizeCommand('auto_readonly', command).allowed, false);
+  }
+});
+
 test('deeply wrapped commands require approval without overflowing the parser', () => {
   const deeplyWrapped = 'env '.repeat(10_000) + 'ls';
 
@@ -118,6 +158,17 @@ test('auto readonly sessions allow only explicit readonly commands', () => {
 test('client-approved sessions allow write commands', () => {
   assert.equal(authorizeCommand('ask_every_time', 'mkdir /tmp/demo').allowed, true);
   assert.equal(authorizeCommand('trusted_session', 'mkdir /tmp/demo').allowed, true);
+});
+
+test('authorization levels preserve per-operation approval for high risk commands', () => {
+  const command = 'rm -rf /tmp/demo';
+
+  assert.equal(authorizeCommand('trusted_session', command).allowed, false);
+  assert.equal(authorizeCommand('ask_every_time', command).allowed, true);
+  assert.throws(
+    () => enforceCommandAuthorization('trusted_session', command),
+    /高危操作仍需逐次审批.*每次询问/
+  );
 });
 
 test('auto readonly sessions allow downloads but deny uploads', () => {

@@ -143,6 +143,17 @@ test('auto readonly rejects writes before remote execution and history recording
   assert.deepEqual(harness.client.operations, []);
 });
 
+test('auto readonly rejects readonly-prefix lookalikes before remote execution and history recording', async () => {
+  const harness = createHarness('auto_readonly');
+  const session = await harness.manager.openSession('profile-1', harness.authorizationLevel);
+
+  await assert.rejects(harness.manager.runCommand(session.id, 'ls=shadowed python mutate.py'));
+
+  assert.equal(harness.client.execCalls, 0);
+  assert.equal(harness.historyRecords.length, 0);
+  assert.deepEqual(harness.client.operations, []);
+});
+
 test('auto readonly rejects uploads before opening SFTP without exposing paths', async () => {
   const harness = createHarness('auto_readonly');
   const session = await harness.manager.openSession('profile-1', harness.authorizationLevel);
@@ -277,3 +288,17 @@ for (const authorizationLevel of ['ask_every_time', 'trusted_session'] as const)
     assert.deepEqual(harness.client.operations, ['exec', 'history', 'sftp']);
   });
 }
+
+test('trusted sessions reject high risk commands before remote execution and history recording', async () => {
+  const harness = createHarness('trusted_session');
+  const session = await harness.manager.openSession('profile-1', harness.authorizationLevel);
+
+  await assert.rejects(
+    harness.manager.runCommand(session.id, 'rm -rf /tmp/demo'),
+    /高危操作仍需逐次审批.*每次询问/
+  );
+
+  assert.equal(harness.client.execCalls, 0);
+  assert.equal(harness.historyRecords.length, 0);
+  assert.deepEqual(harness.client.operations, []);
+});
