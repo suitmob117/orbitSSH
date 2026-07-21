@@ -134,6 +134,19 @@ test('systemctl value options cannot hide high risk SSH restarts from trusted se
   }
 });
 
+test('systemctl options between restart and SSH units cannot bypass trusted-session approval', () => {
+  const commands = [
+    'systemctl restart --no-block ssh',
+    'systemctl restart --job-mode replace ssh',
+    'systemctl restart -- ssh'
+  ];
+
+  for (const command of commands) {
+    assert.equal(assessCommand(command).risk, 'high');
+    assert.equal(authorizeCommand('trusted_session', command).allowed, false);
+  }
+});
+
 test('deeply wrapped commands require approval without overflowing the parser', () => {
   const deeplyWrapped = 'env '.repeat(10_000) + 'ls';
 
