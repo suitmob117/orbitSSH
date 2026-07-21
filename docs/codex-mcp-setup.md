@@ -62,7 +62,9 @@ codex mcp list
 
 ## 凭据与隐私
 
-连接凭据保存在 Windows 凭据管理器中。MCP 工具不会返回密码、私钥口令或其他秘密；`list_connection_profiles` 只返回不含秘密的连接配置信息。
+密码和私钥口令保存在 Windows 凭据管理器中，`list_connection_profiles` 只返回不含这些秘密的连接配置信息。服务会尽力对命令、输出和错误中的已知常见秘密模式脱敏，包括 `password`、`token`、`api_key`、`access_token`、`refresh_token`、`client_secret`、`Bearer`、`Cookie` 和私钥块。
+
+脱敏并非对任意秘密格式的数学保证：请不要将秘密直接写入命令或文件路径；如发现新的秘密格式，应扩展相应的脱敏规则。
 
 ## 构建与冒烟验证
 
