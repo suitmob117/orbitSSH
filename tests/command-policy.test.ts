@@ -112,6 +112,18 @@ test('high risk commands retain their risk in compound syntax', () => {
   assert.equal(assessCommand("bash -c 'rm -rf /'").risk, 'high');
 });
 
+test('append environment assignments cannot hide high risk commands from trusted sessions', () => {
+  const commands = [
+    'env FOO+=x rm -rf /',
+    'sudo FOO+=x systemctl restart ssh'
+  ];
+
+  for (const command of commands) {
+    assert.equal(assessCommand(command).risk, 'high');
+    assert.equal(authorizeCommand('trusted_session', command).allowed, false);
+  }
+});
+
 test('systemctl options do not hide high risk SSH restarts', () => {
   const commands = ['systemctl --no-pager restart ssh', 'systemctl --quiet restart sshd'];
 
