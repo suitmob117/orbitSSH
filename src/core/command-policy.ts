@@ -16,29 +16,172 @@ const WRITE_RISK = /\b(rm|mv|cp|chmod|chown|mkdir|touch|tee|sed\s+-i|apt|apt-get
 const READONLY_PREFIX = /^(ls|pwd|cat|head|tail|grep|stat|df|du|free|top|ps|whoami|id|uname|uptime|systemctl\s+status)\b/i;
 const COMPLEX_SHELL_SYNTAX = /(?:\r|\n|&|\|\||[;|<>`]|\$\()/;
 const COMMON_EXECUTABLE_PATH = /^\/(?:usr\/)?s?bin\/([^/]+)$/i;
+const ENVIRONMENT_ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
+const SUDO_OPTIONS_WITH_VALUE = new Set([
+  '-u',
+  '-g',
+  '-h',
+  '-p',
+  '-r',
+  '-t',
+  '-C',
+  '-D',
+  '--user',
+  '--group',
+  '--host',
+  '--prompt',
+  '--role',
+  '--type',
+  '--close-from',
+  '--chdir'
+]);
+const ENV_OPTIONS_WITH_VALUE = new Set(['-u', '-C', '--unset', '--chdir']);
 
-function stripBasicQuotes(token: string): string {
-  return token.replace(/^["']+|["']+$/g, '');
+interface ParsedShellCommand {
+  executable: string;
+  args: string[];
+}
+
+function splitShellSegments(command: string): string[] {
+  const segments: string[] = [];
+  let current = '';
+  let quote: '"' | "'" | undefined;
+
+  for (let index = 0; index < command.length; index += 1) {
+    const character = command[index];
+    if (quote) {
+      current += character;
+      if (character === quote) {
+        quote = undefined;
+      }
+      continue;
+    }
+    if (character === '"' || character === "'") {
+      quote = character;
+      current += character;
+      continue;
+    }
+    if (character === ';' || character === '|' || character === '&' || /[\r\n]/.test(character)) {
+      if (current.trim()) {
+        segments.push(current);
+      }
+      current = '';
+      if ((character === '|' || character === '&') && command[index + 1] === character) {
+        index += 1;
+      }
+      continue;
+    }
+    current += character;
+  }
+
+  if (current.trim()) {
+    segments.push(current);
+  }
+  return segments;
+}
+
+function tokenizeShellSegment(segment: string): string[] {
+  const tokens: string[] = [];
+  let current = '';
+  let quote: '"' | "'" | undefined;
+
+  const pushCurrent = () => {
+    if (current) {
+      tokens.push(current);
+      current = '';
+    }
+  };
+
+  for (const character of segment) {
+    if (quote) {
+      if (character === quote) {
+        quote = undefined;
+      } else {
+        current += character;
+      }
+      continue;
+    }
+    if (character === '"' || character === "'") {
+      quote = character;
+    } else if (/\s/.test(character)) {
+      pushCurrent();
+    } else {
+      current += character;
+    }
+  }
+  pushCurrent();
+  return tokens;
 }
 
 function executableName(token: string): string | undefined {
   if (/^[\w.-]+$/.test(token)) {
-    return token;
+    return token.toLowerCase();
   }
-  return COMMON_EXECUTABLE_PATH.exec(token)?.[1];
+  const commonExecutable = COMMON_EXECUTABLE_PATH.exec(token)?.[1];
+  if (commonExecutable) {
+    return commonExecutable.toLowerCase();
+  }
+  if (token.startsWith('/') && token.endsWith('/rm')) {
+    return 'rm';
+  }
+  return undefined;
 }
 
-function isDestructiveRm(tokens: string[]): boolean {
-  const rmIndex = tokens.findIndex(
-    (token) => token === 'rm' || (token.startsWith('/') && token.endsWith('/rm'))
-  );
-  if (rmIndex === -1) {
+function optionEnd(tokens: string[], optionsWithValue: ReadonlySet<string>): number {
+  let index = 0;
+  while (index < tokens.length) {
+    const token = tokens[index];
+    if (token === '--') {
+      return index + 1;
+    }
+    if (!token.startsWith('-') || token === '-') {
+      return index;
+    }
+    const optionName = token.split('=', 1)[0];
+    if (optionsWithValue.has(optionName) && !token.includes('=')) {
+      index += 2;
+    } else {
+      index += 1;
+    }
+  }
+  return index;
+}
+
+function parseActualCommand(tokens: string[]): ParsedShellCommand | undefined {
+  let index = 0;
+  while (ENVIRONMENT_ASSIGNMENT.test(tokens[index] ?? '')) {
+    index += 1;
+  }
+  if (index >= tokens.length) {
+    return undefined;
+  }
+
+  const executable = executableName(tokens[index]);
+  if (!executable) {
+    return undefined;
+  }
+  const args = tokens.slice(index + 1);
+
+  if (executable === 'command') {
+    return parseActualCommand(args.slice(optionEnd(args, new Set())));
+  }
+  if (executable === 'env') {
+    return parseActualCommand(args.slice(optionEnd(args, ENV_OPTIONS_WITH_VALUE)));
+  }
+  if (executable === 'sudo') {
+    return parseActualCommand(args.slice(optionEnd(args, SUDO_OPTIONS_WITH_VALUE)));
+  }
+  return { executable, args };
+}
+
+function isDestructiveRm(command: ParsedShellCommand): boolean {
+  if (command.executable !== 'rm') {
     return false;
   }
 
   let recursive = false;
   let force = false;
-  for (const token of tokens.slice(rmIndex + 1)) {
+  for (const token of command.args) {
     if (token === '--') {
       break;
     }
@@ -54,26 +197,30 @@ function isDestructiveRm(tokens: string[]): boolean {
   return recursive && force;
 }
 
-function hasOtherHighRiskCommand(tokens: string[]): boolean {
-  return tokens.some((token, index) => {
-    const executable = executableName(token);
-    if (!executable) {
-      return false;
-    }
-    if (executable === 'dd') {
-      return tokens.slice(index + 1).some((argument) => argument.startsWith('if='));
-    }
-    if (executable === 'systemctl') {
-      return tokens[index + 1] === 'restart' && /^(?:ssh|sshd)$/.test(tokens[index + 2] ?? '');
-    }
-    return OTHER_HIGH_RISK.test(executable);
-  });
+function hasOtherHighRiskCommand(command: ParsedShellCommand): boolean {
+  if (command.executable === 'dd') {
+    return command.args.some((argument) => argument.startsWith('if='));
+  }
+  if (command.executable === 'systemctl') {
+    return command.args[0] === 'restart' && /^(?:ssh|sshd)$/.test(command.args[1] ?? '');
+  }
+  return OTHER_HIGH_RISK.test(command.executable);
 }
 
 function isHighRiskCommand(command: string): boolean {
-  return command.split(/&&|\|\||[;|&]/).some((segment) => {
-    const tokens = segment.trim().split(/\s+/).filter(Boolean).map(stripBasicQuotes);
-    return isDestructiveRm(tokens) || hasOtherHighRiskCommand(tokens);
+  return splitShellSegments(command).some((segment) => {
+    const parsed = parseActualCommand(tokenizeShellSegment(segment));
+    if (!parsed) {
+      return false;
+    }
+    if (parsed.executable === 'bash' || parsed.executable === 'sh') {
+      const commandOption = parsed.args.findIndex(
+        (argument) => argument === '-c' || /^-[^-]*c/.test(argument)
+      );
+      const script = parsed.args[commandOption + 1];
+      return commandOption >= 0 && Boolean(script) && isHighRiskCommand(script);
+    }
+    return isDestructiveRm(parsed) || hasOtherHighRiskCommand(parsed);
   });
 }
 

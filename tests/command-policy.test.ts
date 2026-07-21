@@ -22,6 +22,15 @@ test('complex commands cannot masquerade as readonly commands', () => {
   assert.equal(assessCommand('ls & python mutate.py').risk, 'write');
 });
 
+test('readonly command arguments are not treated as executables', () => {
+  const commands = ['grep passwd /etc/passwd', 'grep reboot notes.txt', 'ls shutdown'];
+
+  for (const command of commands) {
+    assert.equal(assessCommand(command).risk, 'readonly');
+    assert.equal(authorizeCommand('auto_readonly', command).allowed, true);
+  }
+});
+
 test('ambiguous readonly-looking commands require approval', () => {
   const commands = [
     'find . -delete',
