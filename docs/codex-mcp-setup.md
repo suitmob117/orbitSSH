@@ -56,7 +56,7 @@ codex mcp list
 
 - `ask_every_time`：依赖 Codex 对每一次工具调用的审批；服务端允许请求继续到 SSH 层。
 - `auto_readonly`：服务端只放行明确识别为单条只读命令，以及 `download_file` 下载。它拒绝写操作、无法确认只读的命令、包含换行、管道、重定向、命令替换或连接符等复合 Shell 语法的命令，并拒绝 `upload_file` 上传。
-- `trusted_session`：服务端允许会话内请求继续到 SSH 层，但仍受 Codex 的 MCP 工具审批配置约束；请勿将它理解为绕过 Codex 审批。
+- `trusted_session`：服务端可自动放行会话内的普通写操作，但仍受 Codex 的 MCP 工具审批配置约束。被判定为 `high` 的高危命令会在服务端直接拒绝；如确需执行，必须切换到 `ask_every_time`，由 Codex 宿主逐次审批后再进入 SSH 层。请勿将信任会话理解为绕过高危操作审批。
 
 因此，`auto_readonly` 是服务端不可绕过的最小权限边界；Codex 的逐次工具审批则是所有授权等级都应保留的交互层保护。
 

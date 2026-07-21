@@ -112,6 +112,42 @@ test('high risk commands retain their risk in compound syntax', () => {
   assert.equal(assessCommand("bash -c 'rm -rf /'").risk, 'high');
 });
 
+const trustedSessionHighRiskCommands = [
+  String.raw`r\m -rf /`,
+  String.raw`system\ctl restart ssh`,
+  "dash -c 'rm -rf /'",
+  'dd of=/dev/sda',
+  'poweroff',
+  'halt',
+  'systemctl poweroff',
+  'fdisk /dev/sda',
+  'systemctl restart ssh.socket',
+  'rm -r /home'
+];
+
+for (const command of trustedSessionHighRiskCommands) {
+  test(`trusted sessions reject high risk command: ${command}`, () => {
+    assert.equal(assessCommand(command).risk, 'high');
+    assert.equal(authorizeCommand('trusted_session', command).allowed, false);
+    assert.equal(authorizeCommand('ask_every_time', command).allowed, true);
+  });
+}
+
+test('a trailing unquoted backslash fails closed without throwing', () => {
+  const command = 'ls\\';
+
+  assert.doesNotThrow(() => assessCommand(command));
+  assert.equal(assessCommand(command).risk, 'write');
+  assert.equal(authorizeCommand('auto_readonly', command).allowed, false);
+});
+
+test('backslashes inside single quotes remain literal', () => {
+  const command = String.raw`r'\m' -rf /`;
+
+  assert.equal(assessCommand(command).risk, 'write');
+  assert.equal(authorizeCommand('trusted_session', command).allowed, true);
+});
+
 test('append environment assignments cannot hide high risk commands from trusted sessions', () => {
   const commands = [
     'env FOO+=x rm -rf /',

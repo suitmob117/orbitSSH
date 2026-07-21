@@ -11,7 +11,8 @@ export interface AuthorizationDecision extends CommandAssessment {
   allowed: boolean;
 }
 
-const OTHER_HIGH_RISK = /^(?:mkfs(?:\..*)?|shutdown|reboot|userdel|passwd|visudo|iptables|ufw|firewall-cmd)$/i;
+const OTHER_HIGH_RISK = /^(?:mkfs(?:\..*)?|shutdown|reboot|poweroff|halt|fdisk|userdel|passwd|visudo|iptables|ufw|firewall-cmd)$/i;
+const SHELL_EXECUTABLES = new Set(['bash', 'sh', 'dash']);
 const WRITE_RISK_EXECUTABLES = new Set([
   'rm',
   'mv',
@@ -80,6 +81,9 @@ const SYSTEMCTL_OPTIONS_WITH_VALUE = new Set([
   '--type',
   '--state',
   '--property',
+  '--output',
+  '-o',
+  '--lines',
   '--job-mode',
   '--root',
   '--image',
@@ -146,7 +150,8 @@ function tokenizeShellSegment(segment: string): string[] {
     }
   };
 
-  for (const character of segment) {
+  for (let index = 0; index < segment.length; index += 1) {
+    const character = segment[index];
     if (quote) {
       if (character === quote) {
         quote = undefined;
@@ -157,6 +162,13 @@ function tokenizeShellSegment(segment: string): string[] {
     }
     if (character === '"' || character === "'") {
       quote = character;
+    } else if (character === '\\') {
+      if (index + 1 < segment.length) {
+        current += segment[index + 1];
+        index += 1;
+      } else {
+        current += character;
+      }
     } else if (/\s/.test(character)) {
       pushCurrent();
     } else {
@@ -295,36 +307,33 @@ function isDestructiveRm(command: ParsedShellCommand): boolean {
   }
 
   let recursive = false;
-  let force = false;
   for (const token of command.args) {
     if (token === '--') {
       break;
     }
     if (token === '--recursive') {
       recursive = true;
-    } else if (token === '--force') {
-      force = true;
     } else if (/^-[^-]/.test(token)) {
       recursive ||= token.includes('r') || token.includes('R');
-      force ||= token.includes('f');
     }
   }
-  return recursive && force;
+  return recursive;
 }
 
 function hasOtherHighRiskCommand(command: ParsedShellCommand): boolean {
   if (command.executable === 'dd') {
-    return command.args.some((argument) => argument.startsWith('if='));
+    return command.args.some(
+      (argument) => argument.startsWith('if=') || argument.startsWith('of=')
+    );
   }
   if (command.executable === 'systemctl') {
-    const restartIndex = command.args.findIndex(
-      (argument) => argument.toLowerCase() === 'restart'
-    );
+    const systemctl = systemctlCommand(command.args);
+    if (['poweroff', 'reboot', 'halt'].includes(systemctl?.executable ?? '')) {
+      return true;
+    }
     return (
-      restartIndex >= 0 &&
-      command.args
-        .slice(restartIndex + 1)
-        .some((argument) => /^(?:ssh|sshd)(?:\.service)?$/i.test(argument))
+      systemctl?.executable === 'restart' &&
+      systemctl.args.some((argument) => /^(?:ssh|sshd)(?:\.(?:service|socket))?$/i.test(argument))
     );
   }
   return OTHER_HIGH_RISK.test(command.executable);
@@ -336,7 +345,7 @@ function isHighRiskCommand(command: string, shellDepth = 0): boolean {
     if (!parsed) {
       return false;
     }
-    if (parsed.executable === 'bash' || parsed.executable === 'sh') {
+    if (SHELL_EXECUTABLES.has(parsed.executable)) {
       const commandOption = parsed.args.findIndex(
         (argument) => argument === '-c' || /^-[^-]*c/.test(argument)
       );
@@ -358,7 +367,7 @@ function isWriteRiskCommand(command: string, shellDepth = 0): boolean {
     if (!parsed) {
       return false;
     }
-    if (parsed.executable === 'bash' || parsed.executable === 'sh') {
+    if (SHELL_EXECUTABLES.has(parsed.executable)) {
       const commandOption = parsed.args.findIndex(
         (argument) => argument === '-c' || /^-[^-]*c/.test(argument)
       );
