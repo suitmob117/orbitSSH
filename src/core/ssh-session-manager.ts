@@ -37,9 +37,13 @@ function summarizeCommand(command: string, stdout: string, stderr: string, exitC
 
 function formatSshError(error: unknown): string {
   if (error instanceof Error) {
-    return error.message;
+    return redact(error.message);
   }
-  return String(error);
+  return redact(String(error));
+}
+
+function sanitizedError(error: unknown): Error {
+  return new Error(formatSshError(error));
 }
 
 export class SshSessionManager extends EventEmitter {
@@ -164,14 +168,14 @@ export class SshSessionManager extends EventEmitter {
     await new Promise<void>((resolve, reject) => {
       managed.client.sftp((error, sftp) => {
         if (error) {
-          reject(error);
+          reject(sanitizedError(error));
           return;
         }
 
         const callback = (transferError: Error | null | undefined) => {
           sftp.end();
           if (transferError) {
-            reject(transferError);
+            reject(sanitizedError(transferError));
           } else {
             resolve();
           }
@@ -202,7 +206,7 @@ export class SshSessionManager extends EventEmitter {
     await new Promise<void>((resolve, reject) => {
       managed.client.shell({ term: 'xterm-256color', cols: 120, rows: 32 }, (error, stream) => {
         if (error) {
-          reject(error);
+          reject(sanitizedError(error));
           return;
         }
 
@@ -257,7 +261,7 @@ export class SshSessionManager extends EventEmitter {
       };
       const onError = (error: Error) => {
         cleanup();
-        reject(error);
+        reject(sanitizedError(error));
       };
       client.once('ready', onReady);
       client.once('error', onError);
@@ -324,14 +328,14 @@ export class SshSessionManager extends EventEmitter {
       const timeout = setTimeout(() => {
         if (!settled) {
           settled = true;
-          reject(new Error(`命令超时：${command}`));
+          reject(new Error('远程命令执行超时'));
         }
       }, timeoutMs);
 
       client.exec(command, (error, stream) => {
         if (error) {
           clearTimeout(timeout);
-          reject(error);
+          reject(sanitizedError(error));
           return;
         }
 

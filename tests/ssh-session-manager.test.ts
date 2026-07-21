@@ -14,6 +14,10 @@ type FakeChannel = EventEmitter & { stderr: EventEmitter };
 class FakeClient extends EventEmitter {
   execCalls = 0;
   sftpCalls = 0;
+  execError?: Error;
+  sftpError?: Error;
+  fastPutError?: Error;
+  fastGetError?: Error;
   readonly operations: string[] = [];
   readonly executedCommands: string[] = [];
 
@@ -27,7 +31,10 @@ class FakeClient extends EventEmitter {
     this.operations.push('exec');
     this.executedCommands.push(command);
     const stream = Object.assign(new EventEmitter(), { stderr: new EventEmitter() });
-    callback(undefined, stream);
+    callback(this.execError, stream);
+    if (this.execError) {
+      return;
+    }
     queueMicrotask(() => {
       stream.emit('data', Buffer.from('ok'));
       stream.emit('close', 0, '');
@@ -46,14 +53,17 @@ class FakeClient extends EventEmitter {
   ): void {
     this.sftpCalls += 1;
     this.operations.push('sftp');
-    const complete = (done: (error?: Error) => void) => queueMicrotask(() => done());
-    callback(undefined, {
+    const fastPutError = this.fastPutError;
+    const fastGetError = this.fastGetError;
+    const complete = (done: (error?: Error) => void, error?: Error) =>
+      queueMicrotask(() => done(error));
+    callback(this.sftpError, {
       end() {},
       fastPut(_localPath, _remotePath, done) {
-        complete(done);
+        complete(done, fastPutError);
       },
       fastGet(_remotePath, _localPath, done) {
-        complete(done);
+        complete(done, fastGetError);
       }
     });
   }
@@ -162,6 +172,69 @@ test('command secrets are redacted from history without changing remote executio
   assert.deepEqual(harness.client.executedCommands, [command]);
   assert.equal(harness.historyRecords[0]?.command, 'echo password=[REDACTED]');
   assert.equal(result.record.command, 'echo password=[REDACTED]');
+});
+
+test('redacts secrets from command execution errors', async () => {
+  const harness = createHarness('ask_every_time');
+  const session = await harness.manager.openSession('profile-1', harness.authorizationLevel);
+  harness.client.execError = new Error('password=hunter2');
+
+  await assert.rejects(harness.manager.runCommand(session.id, 'echo hello'), (error: Error) => {
+    assert.equal(error.message.includes('hunter2'), false);
+    assert.equal(error.message.includes('[REDACTED]'), true);
+    return true;
+  });
+});
+
+test('redacts secrets from SFTP initialization errors', async () => {
+  const harness = createHarness('ask_every_time');
+  const session = await harness.manager.openSession('profile-1', harness.authorizationLevel);
+  harness.client.sftpError = new Error('token=abc123');
+
+  await assert.rejects(
+    harness.manager.transferFile({
+      sessionId: session.id,
+      direction: 'upload',
+      localPath: '/local/report.txt',
+      remotePath: '/remote/report.txt'
+    }),
+    (error: Error) => {
+      assert.equal(error.message.includes('abc123'), false);
+      assert.equal(error.message.includes('[REDACTED]'), true);
+      return true;
+    }
+  );
+});
+
+test('redacts secrets from SFTP transfer callback errors', async () => {
+  const harness = createHarness('ask_every_time');
+  const session = await harness.manager.openSession('profile-1', harness.authorizationLevel);
+  harness.client.fastPutError = new Error('token=abc123');
+
+  await assert.rejects(
+    harness.manager.transferFile({
+      sessionId: session.id,
+      direction: 'upload',
+      localPath: '/local/report.txt',
+      remotePath: '/remote/report.txt'
+    }),
+    (error: Error) => {
+      assert.equal(error.message.includes('abc123'), false);
+      assert.equal(error.message.includes('[REDACTED]'), true);
+      return true;
+    }
+  );
+});
+
+test('redacts command errors stored on session health checks', async () => {
+  const harness = createHarness('ask_every_time');
+  const session = await harness.manager.openSession('profile-1', harness.authorizationLevel);
+  harness.client.execError = new Error('password=hunter2');
+
+  const health = await harness.manager.getHealth(session.id);
+
+  assert.equal(health.lastError?.includes('hunter2'), false);
+  assert.equal(health.lastError?.includes('[REDACTED]'), true);
 });
 
 for (const authorizationLevel of ['ask_every_time', 'trusted_session'] as const) {
