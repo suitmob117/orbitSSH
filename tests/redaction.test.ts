@@ -34,7 +34,14 @@ test('redacts common JSON authentication secrets while preserving JSON structure
 test('redacts JSON Authorization and Cookie values while preserving JSON structure', () => {
   assert.equal(
     redact('{"Authorization":"Bearer json-secret","Cookie":"sid=cookie-secret"}'),
-    '{"Authorization":"Bearer [REDACTED]","Cookie":"[REDACTED]"}'
+    '{"Authorization":"[REDACTED]","Cookie":"[REDACTED]"}'
+  );
+});
+
+test('redacts a non-Bearer JSON Authorization value and keeps Cookie redacted', () => {
+  assert.equal(
+    redact('{"Authorization":"Basic basic-secret","Cookie":"sid=cookie-secret"}'),
+    '{"Authorization":"[REDACTED]","Cookie":"[REDACTED]"}'
   );
 });
 

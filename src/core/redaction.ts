@@ -28,7 +28,7 @@ const SECRET_PATTERNS: { pattern: RegExp; replacement: string }[] = [
     replacement: '$1$2[REDACTED]$2'
   },
   {
-    pattern: /("authorization"\s*:\s*"bearer\s+)(?:\\.|[^"\\])*"/gi,
+    pattern: /("authorization"\s*:\s*")(?:\\.|[^"\\])*"/gi,
     replacement: '$1[REDACTED]"'
   },
   {
