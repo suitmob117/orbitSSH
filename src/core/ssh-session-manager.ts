@@ -16,6 +16,7 @@ import {
   enforceCommandAuthorization,
   enforceTransferAuthorization
 } from './command-policy';
+import { redactCommand } from './command-redaction';
 import { CredentialVault } from './credential-vault';
 import { HistoryStore } from './history-store';
 import { ProfileStore } from './profile-store';
@@ -136,6 +137,7 @@ export class SshSessionManager extends EventEmitter {
     }
 
     enforceCommandAuthorization(managed.session.authorizationLevel, command);
+    const redactedCommand = redactCommand(command);
     const startedAt = new Date().toISOString();
     const result = await this.execRaw(managed.client, command);
     const finishedAt = new Date().toISOString();
@@ -143,7 +145,7 @@ export class SshSessionManager extends EventEmitter {
     const stderrTail = tail(result.stderr);
     const record = await this.history.append({
       sessionId,
-      command: redact(command),
+      command: redactedCommand,
       startedAt,
       finishedAt,
       exitCode: result.exitCode,

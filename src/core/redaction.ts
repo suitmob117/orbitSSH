@@ -39,21 +39,8 @@ const SECRET_PATTERNS: { pattern: RegExp; replacement: string }[] = [
     pattern: /(?<![!#$%&'*+\-.^_`|~0-9A-Za-z])(authorization\s*:\s*bearer\s+)[A-Za-z0-9\-._~+/]+=*/gi,
     replacement: '$1[REDACTED]'
   },
-  { pattern: /^(cookie\s*:\s*)[^\r\n]+/gim, replacement: '$1[REDACTED]' },
   {
-    pattern: /("cookie\s*:\s*)(?:\\.|[^"\\])*"/gi,
-    replacement: '$1[REDACTED]"'
-  },
-  {
-    pattern: /('cookie\s*:\s*)(?:\\.|[^'\\])*'/gi,
-    replacement: "$1[REDACTED]'"
-  },
-  {
-    pattern: /(curl\s+-H\s+)(cookie\s*:\s*)[^\s;&|<>]+/gi,
-    replacement: '$1$2[REDACTED]'
-  },
-  {
-    pattern: /(?<![!#$%&'*+\-.^_`|~0-9A-Za-z])(cookie\s*:\s*)[!#$%&'*+\-.^_`|~0-9A-Za-z]+=(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s;()\[\]{},'"`]*)(?:;\s*[!#$%&'*+\-.^_`|~0-9A-Za-z]+=(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s;()\[\]{},'"`]*))*/gi,
+    pattern: /(?<![!#$%&'*+\-.^_`|~0-9A-Za-z])(cookie\s*:\s*)[^\r\n]*/gi,
     replacement: '$1[REDACTED]'
   },
   {
