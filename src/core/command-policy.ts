@@ -30,6 +30,9 @@ const READONLY_PREFIX = /^(ls|pwd|cat|head|tail|grep|stat|df|du|free|top|ps|whoa
 const COMPLEX_SHELL_SYNTAX = /(?:\r|\n|&|\|\||[;|<>`]|\$\()/;
 const COMMON_EXECUTABLE_PATH = /^\/(?:usr\/)?s?bin\/([^/]+)$/i;
 const ENVIRONMENT_ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
+const MAX_COMMAND_LENGTH = 32_768;
+const MAX_WRAPPER_DEPTH = 32;
+const COMMAND_OPTIONS_WITH_VALUE = new Set<string>();
 const SUDO_OPTIONS_WITH_VALUE = new Set([
   '-u',
   '-g',
@@ -161,33 +164,44 @@ function optionEnd(tokens: string[], optionsWithValue: ReadonlySet<string>): num
 }
 
 function parseActualCommand(tokens: string[]): ParsedShellCommand | undefined {
-  let index = 0;
-  while (ENVIRONMENT_ASSIGNMENT.test(tokens[index] ?? '')) {
-    index += 1;
-  }
-  if (index >= tokens.length) {
-    return undefined;
-  }
+  let remainingTokens = tokens;
 
-  const executable = executableName(tokens[index]);
-  if (!executable) {
-    return undefined;
-  }
-  const args = tokens.slice(index + 1);
+  for (let wrapperDepth = 0; wrapperDepth <= MAX_WRAPPER_DEPTH; wrapperDepth += 1) {
+    let index = 0;
+    while (ENVIRONMENT_ASSIGNMENT.test(remainingTokens[index] ?? '')) {
+      index += 1;
+    }
+    if (index >= remainingTokens.length) {
+      return undefined;
+    }
 
-  if (executable === 'command') {
-    if (args[0] === '-v' || args[0] === '-V') {
+    const executable = executableName(remainingTokens[index]);
+    if (!executable) {
+      return undefined;
+    }
+    const args = remainingTokens.slice(index + 1);
+
+    if (executable === 'command' && (args[0] === '-v' || args[0] === '-V')) {
       return { executable, args };
     }
-    return parseActualCommand(args.slice(optionEnd(args, new Set())));
+    const wrapperOptions =
+      executable === 'command'
+        ? COMMAND_OPTIONS_WITH_VALUE
+        : executable === 'env'
+          ? ENV_OPTIONS_WITH_VALUE
+          : executable === 'sudo'
+            ? SUDO_OPTIONS_WITH_VALUE
+            : undefined;
+    if (!wrapperOptions) {
+      return { executable, args };
+    }
+    if (wrapperDepth === MAX_WRAPPER_DEPTH) {
+      return undefined;
+    }
+    remainingTokens = args.slice(optionEnd(args, wrapperOptions));
   }
-  if (executable === 'env') {
-    return parseActualCommand(args.slice(optionEnd(args, ENV_OPTIONS_WITH_VALUE)));
-  }
-  if (executable === 'sudo') {
-    return parseActualCommand(args.slice(optionEnd(args, SUDO_OPTIONS_WITH_VALUE)));
-  }
-  return { executable, args };
+
+  return undefined;
 }
 
 function isDestructiveRm(command: ParsedShellCommand): boolean {
@@ -223,7 +237,7 @@ function hasOtherHighRiskCommand(command: ParsedShellCommand): boolean {
   return OTHER_HIGH_RISK.test(command.executable);
 }
 
-function isHighRiskCommand(command: string): boolean {
+function isHighRiskCommand(command: string, shellDepth = 0): boolean {
   return splitShellSegments(command).some((segment) => {
     const parsed = parseActualCommand(tokenizeShellSegment(segment));
     if (!parsed) {
@@ -234,13 +248,18 @@ function isHighRiskCommand(command: string): boolean {
         (argument) => argument === '-c' || /^-[^-]*c/.test(argument)
       );
       const script = parsed.args[commandOption + 1];
-      return commandOption >= 0 && Boolean(script) && isHighRiskCommand(script);
+      return (
+        shellDepth < MAX_WRAPPER_DEPTH &&
+        commandOption >= 0 &&
+        Boolean(script) &&
+        isHighRiskCommand(script, shellDepth + 1)
+      );
     }
     return isDestructiveRm(parsed) || hasOtherHighRiskCommand(parsed);
   });
 }
 
-function isWriteRiskCommand(command: string): boolean {
+function isWriteRiskCommand(command: string, shellDepth = 0): boolean {
   return splitShellSegments(command).some((segment) => {
     const parsed = parseActualCommand(tokenizeShellSegment(segment));
     if (!parsed) {
@@ -251,7 +270,12 @@ function isWriteRiskCommand(command: string): boolean {
         (argument) => argument === '-c' || /^-[^-]*c/.test(argument)
       );
       const script = parsed.args[commandOption + 1];
-      return commandOption >= 0 && Boolean(script) && isWriteRiskCommand(script);
+      return (
+        shellDepth < MAX_WRAPPER_DEPTH &&
+        commandOption >= 0 &&
+        Boolean(script) &&
+        isWriteRiskCommand(script, shellDepth + 1)
+      );
     }
     if (WRITE_RISK_EXECUTABLES.has(parsed.executable)) {
       return true;
@@ -274,6 +298,9 @@ function isWriteRiskCommand(command: string): boolean {
 
 export function assessCommand(command: string): CommandAssessment {
   const trimmed = command.trim();
+  if (trimmed.length > MAX_COMMAND_LENGTH) {
+    return { risk: 'write', reason: '命令过长，无法安全分类为只读操作' };
+  }
   if (!trimmed) {
     return { risk: 'write', reason: '空命令不能被确认为只读操作' };
   }

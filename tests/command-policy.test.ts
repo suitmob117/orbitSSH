@@ -81,6 +81,29 @@ test('high risk commands retain their risk in compound syntax', () => {
   assert.equal(assessCommand("bash -c 'rm -rf /'").risk, 'high');
 });
 
+test('deeply wrapped commands require approval without overflowing the parser', () => {
+  const deeplyWrapped = 'env '.repeat(10_000) + 'ls';
+
+  assert.doesNotThrow(() => assessCommand(deeplyWrapped));
+  assert.equal(assessCommand(deeplyWrapped).risk, 'write');
+  assert.equal(authorizeCommand('auto_readonly', deeplyWrapped).allowed, false);
+});
+
+test('wrapper nesting beyond the policy limit requires approval', () => {
+  const deeplyWrapped = 'env '.repeat(33) + 'rm -rf /';
+
+  assert.equal(assessCommand(deeplyWrapped).risk, 'write');
+  assert.equal(authorizeCommand('auto_readonly', deeplyWrapped).allowed, false);
+});
+
+test('overlong commands require approval without throwing', () => {
+  const overlongCommand = 'ls ' + 'a'.repeat(40_000);
+
+  assert.doesNotThrow(() => assessCommand(overlongCommand));
+  assert.equal(assessCommand(overlongCommand).risk, 'write');
+  assert.equal(authorizeCommand('auto_readonly', overlongCommand).allowed, false);
+});
+
 test('empty commands are treated as write operations', () => {
   assert.equal(assessCommand('   ').risk, 'write');
 });
