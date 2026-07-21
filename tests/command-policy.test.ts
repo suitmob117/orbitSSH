@@ -31,6 +31,20 @@ test('readonly command arguments are not treated as executables', () => {
   }
 });
 
+test('readonly lookup and search commands do not treat arguments as writes or execution', () => {
+  const commands = [
+    'grep rm notes.txt',
+    'grep mkdir notes.txt',
+    'command -v shutdown',
+    'command -V reboot'
+  ];
+
+  for (const command of commands) {
+    assert.equal(assessCommand(command).risk, 'readonly');
+    assert.equal(authorizeCommand('auto_readonly', command).allowed, true);
+  }
+});
+
 test('ambiguous readonly-looking commands require approval', () => {
   const commands = [
     'find . -delete',

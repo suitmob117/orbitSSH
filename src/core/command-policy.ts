@@ -12,8 +12,21 @@ export interface AuthorizationDecision extends CommandAssessment {
 }
 
 const OTHER_HIGH_RISK = /^(?:mkfs(?:\..*)?|shutdown|reboot|userdel|passwd|visudo|iptables|ufw|firewall-cmd)$/i;
-const WRITE_RISK = /\b(rm|mv|cp|chmod|chown|mkdir|touch|tee|sed\s+-i|apt|apt-get|yum|dnf|npm\s+i|pnpm\s+i|docker\s+run|docker\s+compose|systemctl\s+(start|stop|restart|enable|disable))\b/i;
-const READONLY_PREFIX = /^(ls|pwd|cat|head|tail|grep|stat|df|du|free|top|ps|whoami|id|uname|uptime|systemctl\s+status)\b/i;
+const WRITE_RISK_EXECUTABLES = new Set([
+  'rm',
+  'mv',
+  'cp',
+  'chmod',
+  'chown',
+  'mkdir',
+  'touch',
+  'tee',
+  'apt',
+  'apt-get',
+  'yum',
+  'dnf'
+]);
+const READONLY_PREFIX = /^(ls|pwd|cat|head|tail|grep|stat|df|du|free|top|ps|whoami|id|uname|uptime|systemctl\s+status|command\s+-(?:v|V))\b/i;
 const COMPLEX_SHELL_SYNTAX = /(?:\r|\n|&|\|\||[;|<>`]|\$\()/;
 const COMMON_EXECUTABLE_PATH = /^\/(?:usr\/)?s?bin\/([^/]+)$/i;
 const ENVIRONMENT_ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
@@ -163,6 +176,9 @@ function parseActualCommand(tokens: string[]): ParsedShellCommand | undefined {
   const args = tokens.slice(index + 1);
 
   if (executable === 'command') {
+    if (args[0] === '-v' || args[0] === '-V') {
+      return { executable, args };
+    }
     return parseActualCommand(args.slice(optionEnd(args, new Set())));
   }
   if (executable === 'env') {
@@ -224,6 +240,38 @@ function isHighRiskCommand(command: string): boolean {
   });
 }
 
+function isWriteRiskCommand(command: string): boolean {
+  return splitShellSegments(command).some((segment) => {
+    const parsed = parseActualCommand(tokenizeShellSegment(segment));
+    if (!parsed) {
+      return false;
+    }
+    if (parsed.executable === 'bash' || parsed.executable === 'sh') {
+      const commandOption = parsed.args.findIndex(
+        (argument) => argument === '-c' || /^-[^-]*c/.test(argument)
+      );
+      const script = parsed.args[commandOption + 1];
+      return commandOption >= 0 && Boolean(script) && isWriteRiskCommand(script);
+    }
+    if (WRITE_RISK_EXECUTABLES.has(parsed.executable)) {
+      return true;
+    }
+    if (parsed.executable === 'sed') {
+      return parsed.args.some((argument) => /^-[^-]*i/.test(argument));
+    }
+    if (parsed.executable === 'npm' || parsed.executable === 'pnpm') {
+      return parsed.args[0] === 'i' || parsed.args[0] === 'install';
+    }
+    if (parsed.executable === 'docker') {
+      return parsed.args[0] === 'run' || parsed.args[0] === 'compose';
+    }
+    if (parsed.executable === 'systemctl') {
+      return ['start', 'stop', 'restart', 'enable', 'disable'].includes(parsed.args[0] ?? '');
+    }
+    return false;
+  });
+}
+
 export function assessCommand(command: string): CommandAssessment {
   const trimmed = command.trim();
   if (!trimmed) {
@@ -235,7 +283,7 @@ export function assessCommand(command: string): CommandAssessment {
   if (COMPLEX_SHELL_SYNTAX.test(trimmed)) {
     return { risk: 'write', reason: '复合 Shell 语法不能自动确认为只读操作' };
   }
-  if (WRITE_RISK.test(trimmed)) {
+  if (isWriteRiskCommand(trimmed)) {
     return { risk: 'write', reason: '命令可能修改远程服务器状态' };
   }
   if (READONLY_PREFIX.test(trimmed)) {
