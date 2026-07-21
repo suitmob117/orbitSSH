@@ -8,11 +8,15 @@ const ATTACHED_HEADER = /^(?:-H|--header=)(?:cookie|authorization)\s*:/i;
 
 export function redactCommand(command: string): string {
   try {
-    const hasSensitiveHeader = parse(command).some(
-      (entry) =>
-        typeof entry === 'string' &&
-        (SENSITIVE_HEADER.test(entry) || ATTACHED_HEADER.test(entry))
-    );
+    const hasSensitiveHeader = parse(command).some((entry) => {
+      const value =
+        typeof entry === 'string'
+          ? entry
+          : 'op' in entry && entry.op === 'glob'
+            ? entry.pattern
+            : undefined;
+      return value !== undefined && (SENSITIVE_HEADER.test(value) || ATTACHED_HEADER.test(value));
+    });
     return hasSensitiveHeader ? SENSITIVE_COMMAND : redact(command);
   } catch {
     return SENSITIVE_HEADER.test(command) || ATTACHED_HEADER.test(command)

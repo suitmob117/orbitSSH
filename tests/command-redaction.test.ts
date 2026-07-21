@@ -42,6 +42,19 @@ test('fails closed for equivalent Authorization Bearer header forms', () => {
   }
 });
 
+test('fails closed for sensitive headers containing shell glob patterns', () => {
+  const commands = [
+    'curl -HCookie:sid=* /',
+    'curl -H Cookie:sid=* /',
+    'curl --header=Authorization:Bearer* /',
+    'printf Cookie:sid=?'
+  ];
+
+  for (const command of commands) {
+    assert.equal(redactCommand(command), SENSITIVE_COMMAND, command);
+  }
+});
+
 test('uses an HTTP header-token left boundary without matching header-name lookalikes', () => {
   assert.equal(redactCommand("printf '[Cookie: sid=secret]'"), SENSITIVE_COMMAND);
   assert.equal(
