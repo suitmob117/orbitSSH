@@ -31,6 +31,13 @@ test('redacts common JSON authentication secrets while preserving JSON structure
   );
 });
 
+test('redacts JSON Authorization and Cookie values while preserving JSON structure', () => {
+  assert.equal(
+    redact('{"Authorization":"Bearer json-secret","Cookie":"sid=cookie-secret"}'),
+    '{"Authorization":"Bearer [REDACTED]","Cookie":"[REDACTED]"}'
+  );
+});
+
 test('redacts a Bearer token while preserving the Authorization header', () => {
   assert.equal(
     redact('Authorization: Bearer abc.def-123'),
@@ -38,8 +45,29 @@ test('redacts a Bearer token while preserving the Authorization header', () => {
   );
 });
 
+test('redacts an embedded Bearer token while preserving the command structure', () => {
+  assert.equal(
+    redact('curl -H "Authorization: Bearer abc.def-123" /'),
+    'curl -H "Authorization: Bearer [REDACTED]" /'
+  );
+});
+
 test('redacts the entire Cookie header value', () => {
   assert.equal(redact('Cookie: session=abc; csrf=def'), 'Cookie: [REDACTED]');
+});
+
+test('redacts an embedded Cookie value while preserving the log prefix', () => {
+  assert.equal(
+    redact('request failed: Cookie: session=abc'),
+    'request failed: Cookie: [REDACTED]'
+  );
+});
+
+test('redacts a password embedded in a PostgreSQL userinfo URI', () => {
+  assert.equal(
+    redact('postgresql://alice:hunter2@db/app'),
+    'postgresql://alice:[REDACTED]@db/app'
+  );
 });
 
 test('redacts quoted values containing basic escaped characters', () => {

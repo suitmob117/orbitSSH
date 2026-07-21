@@ -28,10 +28,22 @@ const SECRET_PATTERNS: { pattern: RegExp; replacement: string }[] = [
     replacement: '$1$2[REDACTED]$2'
   },
   {
-    pattern: /^(authorization\s*:\s*bearer\s+)[^\s\r\n]+/gim,
+    pattern: /("authorization"\s*:\s*"bearer\s+)(?:\\.|[^"\\])*"/gi,
+    replacement: '$1[REDACTED]"'
+  },
+  {
+    pattern: /("cookie"\s*:\s*")(?:\\.|[^"\\])*"/gi,
+    replacement: '$1[REDACTED]"'
+  },
+  {
+    pattern: /(authorization\s*:\s*bearer\s+)[^\s\r\n'"`]+/gi,
     replacement: '$1[REDACTED]'
   },
-  { pattern: /^(cookie\s*:\s*)[^\r\n]+/gim, replacement: '$1[REDACTED]' },
+  { pattern: /(cookie\s*:\s*)[^\r\n'"`]+/gi, replacement: '$1[REDACTED]' },
+  {
+    pattern: /(postgresql:\/\/[^\s/:@'"`]+:)[^\s/@'"`]+@/gi,
+    replacement: '$1[REDACTED]@'
+  },
   {
     pattern: /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g,
     replacement: '[REDACTED]'

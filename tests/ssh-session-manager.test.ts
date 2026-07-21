@@ -207,6 +207,24 @@ test('command secrets are redacted from history without changing remote executio
   assert.equal(result.record.command, 'echo password=[REDACTED]');
 });
 
+test('embedded Authorization secrets reach SSH unchanged but are redacted from command history', async () => {
+  const harness = createHarness('ask_every_time');
+  const session = await harness.manager.openSession('profile-1', harness.authorizationLevel);
+  const secret = 'abc.def-123';
+  const command = `curl -H "Authorization: Bearer ${secret}" /`;
+
+  const result = await harness.manager.runCommand(session.id, command);
+
+  assert.deepEqual(harness.client.executedCommands, [command]);
+  assert.equal(
+    harness.historyRecords[0]?.command,
+    'curl -H "Authorization: Bearer [REDACTED]" /'
+  );
+  assert.equal(result.record.command, 'curl -H "Authorization: Bearer [REDACTED]" /');
+  assert.equal(JSON.stringify(harness.historyRecords).includes(secret), false);
+  assert.equal(JSON.stringify(result.record).includes(secret), false);
+});
+
 test('redacts secrets from command execution errors', async () => {
   const harness = createHarness('ask_every_time');
   const session = await harness.manager.openSession('profile-1', harness.authorizationLevel);
