@@ -248,7 +248,12 @@ export class SshSessionManager extends EventEmitter {
   }
 
   private async connectClient(client: Client, profile: ConnectionProfile): Promise<void> {
-    const config = await this.createConnectConfig(profile);
+    let config: ConnectConfig;
+    try {
+      config = await this.createConnectConfig(profile);
+    } catch (error) {
+      throw sanitizedError(error);
+    }
 
     await new Promise<void>((resolve, reject) => {
       const cleanup = () => {

@@ -12,6 +12,7 @@ import type { AuthorizationLevel, ConnectionProfile, CommandRecord } from '../sr
 type FakeChannel = EventEmitter & { stderr: EventEmitter };
 
 class FakeClient extends EventEmitter {
+  connectCalls = 0;
   execCalls = 0;
   sftpCalls = 0;
   execError?: Error;
@@ -22,6 +23,7 @@ class FakeClient extends EventEmitter {
   readonly executedCommands: string[] = [];
 
   connect(): this {
+    this.connectCalls += 1;
     queueMicrotask(() => this.emit('ready'));
     return this;
   }
@@ -69,7 +71,10 @@ class FakeClient extends EventEmitter {
   }
 }
 
-function createHarness(authorizationLevel: AuthorizationLevel) {
+function createHarness(
+  authorizationLevel: AuthorizationLevel,
+  profileOverrides: Partial<ConnectionProfile> = {}
+) {
   const client = new FakeClient();
   const historyRecords: Omit<CommandRecord, 'id'>[] = [];
   const profile: ConnectionProfile = {
@@ -83,7 +88,8 @@ function createHarness(authorizationLevel: AuthorizationLevel) {
     connectTimeoutMs: 1000,
     keepaliveIntervalMs: 1000,
     createdAt: '2026-01-01T00:00:00.000Z',
-    updatedAt: '2026-01-01T00:00:00.000Z'
+    updatedAt: '2026-01-01T00:00:00.000Z',
+    ...profileOverrides
   };
   const profiles = { get: async () => profile } as unknown as ProfileStore;
   const credentials = { getSecret: async () => 'password' } as unknown as CredentialVault;
@@ -103,6 +109,22 @@ function createHarness(authorizationLevel: AuthorizationLevel) {
 
   return { client, historyRecords, manager, authorizationLevel };
 }
+
+test('redacts private-key configuration errors before attempting an SSH connection', async () => {
+  const privateKeyPath = `${process.cwd()}\\missing-password=hunter2-private-key`;
+  const harness = createHarness('ask_every_time', {
+    authMethod: 'private_key',
+    privateKeyPath
+  });
+
+  await assert.rejects(harness.manager.openSession('profile-1', harness.authorizationLevel), (error: Error) => {
+    assert.equal(error.message.includes('hunter2'), false);
+    assert.equal(error.message.includes('[REDACTED]'), true);
+    return true;
+  });
+
+  assert.equal(harness.client.connectCalls, 0);
+});
 
 test('auto readonly rejects writes before remote execution and history recording', async () => {
   const harness = createHarness('auto_readonly');
