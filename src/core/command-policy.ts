@@ -317,9 +317,10 @@ function hasOtherHighRiskCommand(command: ParsedShellCommand): boolean {
     return command.args.some((argument) => argument.startsWith('if='));
   }
   if (command.executable === 'systemctl') {
-    const systemctl = systemctlCommand(command.args);
-    return (
-      systemctl?.executable === 'restart' && /^(?:ssh|sshd)$/.test(systemctl.args[0] ?? '')
+    return command.args.some(
+      (argument, index) =>
+        argument.toLowerCase() === 'restart' &&
+        /^(?:ssh|sshd)$/i.test(command.args[index + 1] ?? '')
     );
   }
   return OTHER_HIGH_RISK.test(command.executable);

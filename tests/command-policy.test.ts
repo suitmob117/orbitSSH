@@ -121,6 +121,19 @@ test('systemctl options do not hide high risk SSH restarts', () => {
   }
 });
 
+test('systemctl value options cannot hide high risk SSH restarts from trusted sessions', () => {
+  const commands = [
+    'systemctl --output short restart ssh',
+    'systemctl -o short restart ssh',
+    'systemctl --lines 20 restart ssh'
+  ];
+
+  for (const command of commands) {
+    assert.equal(assessCommand(command).risk, 'high');
+    assert.equal(authorizeCommand('trusted_session', command).allowed, false);
+  }
+});
+
 test('deeply wrapped commands require approval without overflowing the parser', () => {
   const deeplyWrapped = 'env '.repeat(10_000) + 'ls';
 
