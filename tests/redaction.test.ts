@@ -105,6 +105,20 @@ test('redacts an embedded Cookie field without consuming later log fields', () =
   );
 });
 
+test('redacts a complete embedded Cookie list containing a quoted value', () => {
+  assert.equal(
+    redact('request failed: Cookie: sid="cookie-secret"; theme=dark'),
+    'request failed: Cookie: [REDACTED]'
+  );
+});
+
+test('redacts every pair in a complete embedded Cookie list', () => {
+  assert.equal(
+    redact('request failed: Cookie: sid=secret; csrf=second-secret'),
+    'request failed: Cookie: [REDACTED]'
+  );
+});
+
 test('uses an HTTP header-token left boundary for embedded Cookie fields', () => {
   assert.equal(
     redact('error[Cookie: sid=secret]'),
@@ -131,6 +145,13 @@ test('redacts a single quote inside a double-quoted curl Cookie header', () => {
   assert.equal(
     redact('curl -H "Cookie: sid=abc\'def" /'),
     'curl -H "Cookie: [REDACTED]" /'
+  );
+});
+
+test('redacts a single-quoted curl Cookie header while preserving its closing quote', () => {
+  assert.equal(
+    redact("curl -H 'Cookie: sid=secret' /"),
+    "curl -H 'Cookie: [REDACTED]' /"
   );
 });
 

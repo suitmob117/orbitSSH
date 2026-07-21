@@ -46,10 +46,14 @@ const SECRET_PATTERNS: { pattern: RegExp; replacement: string }[] = [
   },
   {
     pattern: /('cookie\s*:\s*)(?:\\.|[^'\\])*'/gi,
-    replacement: '$1[REDACTED]'
+    replacement: "$1[REDACTED]'"
   },
   {
-    pattern: /(?<![!#$%&'*+\-.^_`|~0-9A-Za-z])(cookie\s*:\s*)[^\s;&|<>()[\]{},'"`]+/gi,
+    pattern: /(curl\s+-H\s+)(cookie\s*:\s*)[^\s;&|<>]+/gi,
+    replacement: '$1$2[REDACTED]'
+  },
+  {
+    pattern: /(?<![!#$%&'*+\-.^_`|~0-9A-Za-z])(cookie\s*:\s*)[!#$%&'*+\-.^_`|~0-9A-Za-z]+=(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s;()\[\]{},'"`]*)(?:;\s*[!#$%&'*+\-.^_`|~0-9A-Za-z]+=(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s;()\[\]{},'"`]*))*/gi,
     replacement: '$1[REDACTED]'
   },
   {
