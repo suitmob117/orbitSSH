@@ -59,8 +59,36 @@ test('redacts an embedded Bearer token while preserving the command structure', 
   );
 });
 
+test('redacts a Bearer token without consuming trailing log punctuation', () => {
+  assert.equal(
+    redact('error (Authorization: Bearer abc), retry'),
+    'error (Authorization: Bearer [REDACTED]), retry'
+  );
+});
+
+test('redacts a quoted curl Bearer token without consuming later shell syntax', () => {
+  assert.equal(
+    redact('curl -H "Authorization: Bearer abc.def"; echo ok'),
+    'curl -H "Authorization: Bearer [REDACTED]"; echo ok'
+  );
+});
+
+test('does not treat XAuthorization as the standard Authorization header', () => {
+  assert.equal(
+    redact('XAuthorization: Bearer public-value'),
+    'XAuthorization: Bearer public-value'
+  );
+});
+
 test('redacts the entire Cookie header value', () => {
   assert.equal(redact('Cookie: session=abc; csrf=def'), 'Cookie: [REDACTED]');
+});
+
+test('redacts an entire line-start Cookie header containing a quoted cookie value', () => {
+  assert.equal(
+    redact('Cookie: sid="cookie-secret"; theme=dark'),
+    'Cookie: [REDACTED]'
+  );
 });
 
 test('redacts an embedded Cookie value while preserving the log prefix', () => {
@@ -70,10 +98,31 @@ test('redacts an embedded Cookie value while preserving the log prefix', () => {
   );
 });
 
+test('redacts an embedded Cookie field without consuming later log fields', () => {
+  assert.equal(
+    redact('before Cookie: sid=secret after=visible'),
+    'before Cookie: [REDACTED] after=visible'
+  );
+});
+
+test('redacts a quoted curl Cookie header while preserving the command structure', () => {
+  assert.equal(
+    redact('curl -H "Cookie: sid=secret; theme=dark" /'),
+    'curl -H "Cookie: [REDACTED]" /'
+  );
+});
+
 test('redacts a password embedded in a PostgreSQL userinfo URI', () => {
   assert.equal(
     redact('postgresql://alice:hunter2@db/app'),
     'postgresql://alice:[REDACTED]@db/app'
+  );
+});
+
+test('redacts a password embedded in a postgres userinfo URI', () => {
+  assert.equal(
+    redact('postgres://alice:hunter2@db/app'),
+    'postgres://alice:[REDACTED]@db/app'
   );
 });
 

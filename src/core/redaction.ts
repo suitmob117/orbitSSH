@@ -36,12 +36,16 @@ const SECRET_PATTERNS: { pattern: RegExp; replacement: string }[] = [
     replacement: '$1[REDACTED]"'
   },
   {
-    pattern: /(authorization\s*:\s*bearer\s+)[^\s\r\n'"`]+/gi,
+    pattern: /(?<![!#$%&'*+\-.^_`|~0-9A-Za-z])(authorization\s*:\s*bearer\s+)[A-Za-z0-9\-._~+/]+=*/gi,
     replacement: '$1[REDACTED]'
   },
-  { pattern: /(cookie\s*:\s*)[^\r\n'"`]+/gi, replacement: '$1[REDACTED]' },
+  { pattern: /^(cookie\s*:\s*)[^\r\n]+/gim, replacement: '$1[REDACTED]' },
   {
-    pattern: /(postgresql:\/\/[^\s/:@'"`]+:)[^\s/@'"`]+@/gi,
+    pattern: /(^|[\s("'`])(cookie\s*:\s*)[!#$%&'*+\-.^_`|~0-9A-Za-z]+=(?:"(?:\\.|[^"\\])*"|[^\s;"',`]+)(?:;\s*[!#$%&'*+\-.^_`|~0-9A-Za-z]+=(?:"(?:\\.|[^"\\])*"|[^\s;"',`]+))*/gi,
+    replacement: '$1$2[REDACTED]'
+  },
+  {
+    pattern: /(postgres(?:ql)?:\/\/[^\s/:@'"`]+:)[^\s/@'"`]+@/gi,
     replacement: '$1[REDACTED]@'
   },
   {
