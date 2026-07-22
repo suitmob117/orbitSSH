@@ -77,6 +77,12 @@ function unavailableSqlite(): SqliteStorePort {
     appendHistory: () => {
       throw new Error('locked');
     },
+    getHostKey: () => {
+      throw new Error('locked');
+    },
+    saveHostKey: () => {
+      throw new Error('locked');
+    },
     close: () => undefined
   };
 }

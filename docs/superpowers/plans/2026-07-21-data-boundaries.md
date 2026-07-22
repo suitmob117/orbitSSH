@@ -128,7 +128,7 @@ git commit -m "feat: persist profiles and history in SQLite"
 - 修改：`src/core/ssh-session-manager.ts`、`src/shared/types.ts`、`src/main/index.ts`、`src/preload/index.ts`、`src/renderer/src/App.tsx`
 - 测试：`tests/host-key-store.test.ts`、`tests/ssh-session-manager.test.ts`
 
-- [ ] **步骤 1：写出失败的指纹策略测试**
+- [x] **步骤 1：写出失败的指纹策略测试**
 
 ```ts
 test('accepts first key once and blocks a changed key before ready', async () => {
@@ -138,12 +138,12 @@ test('accepts first key once and blocks a changed key before ready', async () =>
 });
 ```
 
-- [ ] **步骤 2：运行测试确认失败**
+- [x] **步骤 2：运行测试确认失败**
 
 运行：`npm.cmd test -- tests/host-key-store.test.ts tests/ssh-session-manager.test.ts`
 预期：失败，`hostVerifier` 尚未配置。
 
-- [ ] **步骤 3：实现指纹记录和 GUI 人工替换**
+- [x] **步骤 3：实现指纹记录和 GUI 人工替换**
 
 ```ts
 hostVerifier: (key) => {
@@ -154,12 +154,12 @@ hostVerifier: (key) => {
 
 首次指纹仅在 GUI 明确确认时持久化；MCP 对未知或变化指纹一律失败。变化时返回旧/新 SHA-256 和风险说明，只有 GUI `replaceHostKeyTrust` IPC 可以更新记录。
 
-- [ ] **步骤 4：运行指纹测试**
+- [x] **步骤 4：运行指纹测试**
 
 运行：`npm.cmd test -- tests/host-key-store.test.ts tests/ssh-session-manager.test.ts`
 预期：通过。
 
-- [ ] **步骤 5：提交**
+- [x] **步骤 5：准备提交**
 
 ```bash
 git add src/core/host-key-store.ts src/core/ssh-session-manager.ts src/shared/types.ts src/main/index.ts src/preload/index.ts src/renderer/src/App.tsx tests/host-key-store.test.ts tests/ssh-session-manager.test.ts

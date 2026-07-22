@@ -4,8 +4,8 @@ import { createRequire } from 'node:module';
 import path from 'node:path';
 import type BetterSqlite3 from 'better-sqlite3';
 import type { z } from 'zod';
-import type { CommandRecord, ConnectionProfile } from '../shared/types';
-import { commandRecordSchema, connectionProfileSchema } from '../shared/validation';
+import type { CommandRecord, ConnectionProfile, TrustedHostKey } from '../shared/types';
+import { commandRecordSchema, connectionProfileSchema, trustedHostKeySchema } from '../shared/validation';
 import { resolveAppDataDir, resolveSqliteDatabasePath } from './paths';
 
 export type MigrationStatus = {
@@ -33,6 +33,8 @@ export interface SqliteStorePort {
   deleteProfile(id: string): void;
   listHistory(): CommandRecord[];
   appendHistory(record: CommandRecord): CommandRecord;
+  getHostKey(profileId: string): TrustedHostKey | undefined;
+  saveHostKey(hostKey: TrustedHostKey): TrustedHostKey;
   close(): void;
 }
 
@@ -131,7 +133,15 @@ export class SqliteStore implements SqliteStorePort {
     const validated = connectionProfileSchema.parse(profile);
     this.assertWritable();
     return this.runDatabase(() => {
-      this.requireDatabase().prepare(`
+      const db = this.requireDatabase();
+      const save = db.transaction(() => {
+        const existing = db.prepare('SELECT host, port FROM profiles WHERE id = ?').get(validated.id) as
+          | { host: string; port: number }
+          | undefined;
+        if (existing && (existing.host !== validated.host || existing.port !== validated.port)) {
+          db.prepare('DELETE FROM host_keys WHERE profile_id = ?').run(validated.id);
+        }
+        db.prepare(`
         INSERT INTO profiles (
           id, name, host, port, username, auth_method, private_key_path, credential_id,
           private_key_passphrase_credential_id, connect_timeout_ms, keepalive_interval_ms,
@@ -153,7 +163,9 @@ export class SqliteStore implements SqliteStorePort {
           keepalive_interval_ms = excluded.keepalive_interval_ms,
           jump_host = excluded.jump_host,
           updated_at = excluded.updated_at
-      `).run(this.profileParameters(validated));
+        `).run(this.profileParameters(validated));
+      });
+      save();
       return validated;
     });
   }
@@ -161,7 +173,11 @@ export class SqliteStore implements SqliteStorePort {
   deleteProfile(id: string): void {
     this.assertWritable();
     this.runDatabase(() => {
-      this.requireDatabase().prepare('DELETE FROM profiles WHERE id = ?').run(id);
+      const db = this.requireDatabase();
+      db.transaction(() => {
+        db.prepare('DELETE FROM host_keys WHERE profile_id = ?').run(id);
+        db.prepare('DELETE FROM profiles WHERE id = ?').run(id);
+      })();
     });
   }
 
@@ -189,6 +205,33 @@ export class SqliteStore implements SqliteStorePort {
           )
         `).run();
       })();
+      return validated;
+    });
+  }
+
+  getHostKey(profileId: string): TrustedHostKey | undefined {
+    return this.runDatabase(() => {
+      const row = this.requireDatabase().prepare(`
+        SELECT profile_id, host, port, fingerprint, trusted_at, updated_at
+        FROM host_keys WHERE profile_id = ?
+      `).get(profileId) as Record<string, unknown> | undefined;
+      return row ? this.toHostKey(row) : undefined;
+    });
+  }
+
+  saveHostKey(hostKey: TrustedHostKey): TrustedHostKey {
+    const validated = trustedHostKeySchema.parse(hostKey);
+    this.assertWritable();
+    return this.runDatabase(() => {
+      this.requireDatabase().prepare(`
+        INSERT INTO host_keys (profile_id, host, port, fingerprint, trusted_at, updated_at)
+        VALUES (@profileId, @host, @port, @fingerprint, @trustedAt, @updatedAt)
+        ON CONFLICT(profile_id) DO UPDATE SET
+          host = excluded.host,
+          port = excluded.port,
+          fingerprint = excluded.fingerprint,
+          updated_at = excluded.updated_at
+      `).run(validated);
       return validated;
     });
   }
@@ -625,6 +668,17 @@ export class SqliteStore implements SqliteStorePort {
     if (typeof row.exit_code === 'number') record.exitCode = row.exit_code;
     this.assignOptional(record, 'signal', row.signal);
     return commandRecordSchema.parse(record);
+  }
+
+  private toHostKey(row: Record<string, unknown>): TrustedHostKey {
+    return trustedHostKeySchema.parse({
+      profileId: row.profile_id,
+      host: row.host,
+      port: row.port,
+      fingerprint: row.fingerprint,
+      trustedAt: row.trusted_at,
+      updatedAt: row.updated_at
+    });
   }
 
   private assignOptional(target: Record<string, unknown>, key: string, value: unknown): void {

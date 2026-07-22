@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events';
 import { readFile } from 'node:fs/promises';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { Client, type ConnectConfig, type ClientChannel } from 'ssh2';
 import type {
   AuthorizationLevel,
@@ -9,6 +9,8 @@ import type {
   ConnectionSession,
   FileTransferRequest,
   FileTransferResult,
+  HostKeyTrustConfirmation,
+  HostKeyTrustChallenge,
   TerminalChunk
 } from '../shared/types';
 import {
@@ -19,6 +21,7 @@ import {
 import { redactCommand } from './command-redaction';
 import { CredentialVault } from './credential-vault';
 import { HistoryStore } from './history-store';
+import type { HostKeyStorePort } from './host-key-store';
 import { ProfileStore } from './profile-store';
 import { redact, tail } from './redaction';
 
@@ -49,11 +52,15 @@ function sanitizedError(error: unknown): Error {
 
 export class SshSessionManager extends EventEmitter {
   private readonly sessions = new Map<string, ManagedSession>();
+  /** 同一 profile 的握手只允许一个 in-flight Promise，供守卫和并发调用共同使用。 */
+  private readonly openingSessions = new Map<string, Promise<ConnectionSession>>();
+  private readonly pendingHostKeyChallenges = new Map<string, HostKeyTrustChallenge>();
 
   constructor(
     private readonly profiles: ProfileStore,
     private readonly credentials: CredentialVault,
     private readonly history: HistoryStore,
+    private readonly hostKeys: HostKeyStorePort,
     private readonly clientFactory: () => Client = () => new Client()
   ) {
     super();
@@ -63,6 +70,56 @@ export class SshSessionManager extends EventEmitter {
     return [...this.sessions.values()].map((managed) => managed.session);
   }
 
+  assertProfileCanBeUpdated(profileId: string, endpoint: Pick<ConnectionProfile, 'host' | 'port'>): void {
+    const active = this.findActiveProfileSession(profileId);
+    if (this.openingSessions.has(profileId)) {
+      throw new Error('当前配置正在建立会话，请等待连接完成或失败后再修改主机或端口');
+    }
+    if (active && (active.profile.host !== endpoint.host || active.profile.port !== endpoint.port)) {
+      throw new Error('当前配置存在活跃会话，请先关闭会话后再修改主机或端口');
+    }
+  }
+
+  assertProfileCanBeDeleted(profileId: string): void {
+    if (this.openingSessions.has(profileId)) {
+      throw new Error('当前配置正在建立会话，请等待连接完成或失败后再删除配置');
+    }
+    if (this.findActiveProfileSession(profileId)) {
+      throw new Error('当前配置存在活跃会话，请先关闭会话后再删除配置');
+    }
+  }
+
+  listHostKeyTrustChallenges(): HostKeyTrustChallenge[] {
+    return [...this.pendingHostKeyChallenges.values()].map((challenge) => ({ ...challenge }));
+  }
+
+  async confirmHostKeyTrust(confirmation: HostKeyTrustConfirmation): Promise<void> {
+    const pending = this.pendingHostKeyChallenges.get(confirmation.profileId);
+    if (!pending || pending.challengeId !== confirmation.challengeId) {
+      throw new Error('没有匹配的待确认主机指纹，请重新发起连接并核对风险信息');
+    }
+    const profile = await this.profiles.get(confirmation.profileId);
+    if (profile.host !== pending.host || profile.port !== pending.port) {
+      this.pendingHostKeyChallenges.delete(confirmation.profileId);
+      throw new Error('连接配置的主机或端口已变化，已丢弃旧指纹确认，请重新连接');
+    }
+    // await 后重新检查，防止并发确认了已被新握手替换的挑战。
+    if (this.pendingHostKeyChallenges.get(confirmation.profileId)?.challengeId !== confirmation.challengeId) {
+      throw new Error('主机指纹确认已过期，请重新发起连接并核对风险信息');
+    }
+    // HostKeyStore 只接受本次握手产生的待确认项，绝不由连接流程自动写入。
+    this.hostKeys.confirm(pending);
+    this.pendingHostKeyChallenges.delete(confirmation.profileId);
+  }
+
+  discardHostKeyChallenge(profileId: string): void {
+    this.pendingHostKeyChallenges.delete(profileId);
+  }
+
+  discardPendingHostKeyChallenge(profileId: string): void {
+    this.discardHostKeyChallenge(profileId);
+  }
+
   async openSession(profileId: string, authorizationLevel: AuthorizationLevel): Promise<ConnectionSession> {
     const existing = [...this.sessions.values()].find((item) => item.profile.id === profileId);
     if (existing && existing.session.health !== 'disconnected') {
@@ -70,6 +127,26 @@ export class SshSessionManager extends EventEmitter {
       return existing.session;
     }
 
+    const opening = this.openingSessions.get(profileId);
+    if (opening) {
+      const session = await opening;
+      session.authorizationLevel = authorizationLevel;
+      return session;
+    }
+
+    // 在任何 await 之前登记，确保并发 open 与 IPC 配置变更都能看到 in-flight 状态。
+    const openingSession = this.openSessionOnce(profileId, authorizationLevel);
+    this.openingSessions.set(profileId, openingSession);
+    try {
+      return await openingSession;
+    } finally {
+      if (this.openingSessions.get(profileId) === openingSession) {
+        this.openingSessions.delete(profileId);
+      }
+    }
+  }
+
+  private async openSessionOnce(profileId: string, authorizationLevel: AuthorizationLevel): Promise<ConnectionSession> {
     const profile = await this.profiles.get(profileId);
     const client = this.clientFactory();
     const session: ConnectionSession = {
@@ -258,6 +335,7 @@ export class SshSessionManager extends EventEmitter {
     }
 
     await new Promise<void>((resolve, reject) => {
+      let hostKeyFailure: Error | undefined;
       const cleanup = () => {
         client.off('ready', onReady);
         client.off('error', onError);
@@ -268,12 +346,43 @@ export class SshSessionManager extends EventEmitter {
       };
       const onError = (error: Error) => {
         cleanup();
-        reject(sanitizedError(error));
+        reject(hostKeyFailure ?? sanitizedError(error));
       };
       client.once('ready', onReady);
       client.once('error', onError);
+      config.hostVerifier = (key: Buffer) => {
+        try {
+          const challenge = this.createHostKeyChallenge(profile, key);
+          if (!challenge) return true;
+          this.pendingHostKeyChallenges.set(profile.id, challenge);
+          hostKeyFailure = new Error(challenge.risk === 'changed'
+            ? 'SSH 主机指纹已变化，已拒绝连接。请在桌面端核对旧/新指纹及中间人攻击风险后确认替换。'
+            : '发现未知 SSH 主机指纹，已拒绝连接。请在桌面端核对指纹后确认信任。');
+          return false;
+        } catch {
+          hostKeyFailure = new Error('无法安全读取主机指纹信任记录，已拒绝连接。请检查本地 SQLite 数据库后重试。');
+          return false;
+        }
+      };
       client.connect(config);
     });
+  }
+
+  private createHostKeyChallenge(profile: ConnectionProfile, key: Buffer): HostKeyTrustChallenge | undefined {
+    const newFingerprint = `SHA256:${createHash('sha256').update(key).digest('base64')}`;
+    const trusted = this.hostKeys.get(profile.id);
+    if (trusted && trusted.host === profile.host && trusted.port === profile.port && trusted.fingerprint === newFingerprint) {
+      return undefined;
+    }
+    return {
+      challengeId: randomUUID(),
+      profileId: profile.id,
+      host: profile.host,
+      port: profile.port,
+      oldFingerprint: trusted?.fingerprint,
+      newFingerprint,
+      risk: trusted ? 'changed' : 'first_seen'
+    };
   }
 
   private async createConnectConfig(profile: ConnectionProfile): Promise<ConnectConfig> {
@@ -369,6 +478,12 @@ export class SshSessionManager extends EventEmitter {
       throw new Error(`连接会话不存在：${sessionId}`);
     }
     return managed;
+  }
+
+  private findActiveProfileSession(profileId: string): ManagedSession | undefined {
+    return [...this.sessions.values()].find((managed) =>
+      managed.profile.id === profileId && managed.session.health !== 'disconnected'
+    );
   }
 
   private findTerminal(terminalId: string): ClientChannel {

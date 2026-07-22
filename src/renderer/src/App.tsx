@@ -25,7 +25,8 @@ import type {
   ConnectionProfile,
   ConnectionProfileInput,
   ConnectionSession,
-  FileTransferRequest
+  FileTransferRequest,
+  HostKeyTrustChallenge
 } from '@shared/types';
 import { Badge, Button, DangerButton, Input, Label, SecondaryButton, Select } from './components/ui';
 import { cn } from './lib/utils';
@@ -188,6 +189,7 @@ export function App(): JSX.Element {
   const [showPrivateKeyPassphrase, setShowPrivateKeyPassphrase] = useState(false);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string>();
+  const [hostKeyChallenges, setHostKeyChallenges] = useState<HostKeyTrustChallenge[]>([]);
   const [theme, setTheme] = useState<'light' | 'dark'>('light');
 
   const selectedProfile = profiles.find((profile) => profile.id === selectedProfileId);
@@ -199,14 +201,16 @@ export function App(): JSX.Element {
   }, [selectedProfileId, sessions]);
 
   async function refresh(): Promise<void> {
-    const [nextProfiles, nextSessions, nextHistory] = await Promise.all([
+    const [nextProfiles, nextSessions, nextHistory, nextHostKeyChallenges] = await Promise.all([
       window.aiSsh.listProfiles(),
       window.aiSsh.listSessions(),
-      window.aiSsh.listHistory()
+      window.aiSsh.listHistory(),
+      window.aiSsh.listHostKeyTrustChallenges()
     ]);
     setProfiles(nextProfiles);
     setSessions(nextSessions);
     setHistory(nextHistory);
+    setHostKeyChallenges(nextHostKeyChallenges);
     if (!selectedProfileId && nextProfiles[0]) {
       setSelectedProfileId(nextProfiles[0].id);
       setEditingId(nextProfiles[0].id);
@@ -246,6 +250,20 @@ export function App(): JSX.Element {
       setEditingId(saved.id);
       setForm(toProfileForm(saved));
       setMessage('连接配置已保存');
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : String(error));
+      setHostKeyChallenges(await window.aiSsh.listHostKeyTrustChallenges());
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function confirmHostKeyTrust(challenge: HostKeyTrustChallenge): Promise<void> {
+    setBusy(true);
+    try {
+      await window.aiSsh.confirmHostKeyTrust({ profileId: challenge.profileId, challengeId: challenge.challengeId });
+      await refresh();
+      setMessage('主机指纹已确认。请再次点击“连接”以建立会话。');
     } catch (error) {
       setMessage(error instanceof Error ? error.message : String(error));
     } finally {
@@ -321,6 +339,7 @@ export function App(): JSX.Element {
   }
 
   const visibleHistory = activeSession ? history.filter((record) => record.sessionId === activeSession.id) : [];
+  const hostKeyChallenge = hostKeyChallenges.find((challenge) => challenge.profileId === selectedProfileId);
 
   return (
     <div className="grid h-full grid-cols-[280px_1fr_340px] grid-rows-[1fr_auto] overflow-hidden">
@@ -414,6 +433,25 @@ export function App(): JSX.Element {
 
         {message ? (
           <div className="mb-4 animate-fade-in-up rounded-lg border border-primary/30 bg-primary/[0.07] px-4 py-2.5 text-sm text-foreground/90 shadow-glow-sm">{message}</div>
+        ) : null}
+        {hostKeyChallenge ? (
+          <div className="mb-4 rounded-xl border border-amber-500/50 bg-amber-500/10 p-4 text-sm shadow-glow-sm">
+            <div className="font-semibold text-amber-700 dark:text-amber-300">
+              {hostKeyChallenge.risk === 'changed' ? '检测到服务器主机指纹变化' : '首次连接，需确认服务器身份'}
+            </div>
+            <p className="mt-1 text-muted-foreground">
+              {hostKeyChallenge.risk === 'changed'
+                ? '这可能意味着服务器重装，也可能存在中间人攻击。确认前请通过可信渠道核对。'
+                : '请通过可信渠道核对服务器提供的 SHA-256 指纹后再确认。'}
+            </p>
+            <div className="mt-3 grid gap-2 font-mono text-xs">
+              <div><span className="font-sans text-muted-foreground">旧指纹：</span>{hostKeyChallenge.oldFingerprint ?? '（首次信任，无旧指纹）'}</div>
+              <div><span className="font-sans text-muted-foreground">新指纹：</span>{hostKeyChallenge.newFingerprint}</div>
+            </div>
+            <DangerButton className="mt-3" disabled={busy} onClick={() => void confirmHostKeyTrust(hostKeyChallenge)}>
+              {hostKeyChallenge.risk === 'changed' ? '已核对，替换信任指纹' : '已核对，信任此主机'}
+            </DangerButton>
+          </div>
         ) : null}
 
         <section className="grid grid-cols-1 gap-4 2xl:grid-cols-2">

@@ -47,6 +47,30 @@ export interface ConnectionSession {
   lastError?: string;
 }
 
+export interface TrustedHostKey {
+  profileId: string;
+  host: string;
+  port: number;
+  fingerprint: string;
+  trustedAt: string;
+  updatedAt: string;
+}
+
+export interface HostKeyTrustChallenge {
+  challengeId: string;
+  profileId: string;
+  host: string;
+  port: number;
+  oldFingerprint?: string;
+  newFingerprint: string;
+  risk: 'first_seen' | 'changed';
+}
+
+export interface HostKeyTrustConfirmation {
+  profileId: string;
+  challengeId: string;
+}
+
 export interface CommandRecord {
   id: string;
   sessionId: string;
@@ -99,6 +123,8 @@ export interface AiSshApi {
   saveProfile(input: ConnectionProfileInput, id?: string): Promise<ConnectionProfile>;
   deleteProfile(id: string): Promise<void>;
   openSession(profileId: string, authorizationLevel: AuthorizationLevel): Promise<ConnectionSession>;
+  listHostKeyTrustChallenges(): Promise<HostKeyTrustChallenge[]>;
+  confirmHostKeyTrust(confirmation: HostKeyTrustConfirmation): Promise<void>;
   closeSession(sessionId: string): Promise<void>;
   listSessions(): Promise<ConnectionSession[]>;
   getSessionHealth(sessionId: string): Promise<ConnectionSession>;

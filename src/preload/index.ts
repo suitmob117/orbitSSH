@@ -13,6 +13,8 @@ const api: AiSshApi = {
   deleteProfile: (id: string) => ipcRenderer.invoke('profiles:delete', id),
   openSession: (profileId: string, authorizationLevel: AuthorizationLevel) =>
     ipcRenderer.invoke('sessions:open', profileId, authorizationLevel),
+  listHostKeyTrustChallenges: () => ipcRenderer.invoke('host-keys:pending'),
+  confirmHostKeyTrust: (challenge) => ipcRenderer.invoke('host-keys:confirm', challenge),
   closeSession: (sessionId: string) => ipcRenderer.invoke('sessions:close', sessionId),
   listSessions: () => ipcRenderer.invoke('sessions:list'),
   getSessionHealth: (sessionId: string) => ipcRenderer.invoke('sessions:health', sessionId),

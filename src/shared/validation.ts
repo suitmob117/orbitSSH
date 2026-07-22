@@ -32,6 +32,31 @@ export const commandRecordSchema = z.object({
 
 export const authorizationLevelSchema = z.enum(['ask_every_time', 'auto_readonly', 'trusted_session']);
 
+export const hostKeyTrustChallengeSchema = z.object({
+  challengeId: z.string().uuid(),
+  profileId: z.string().min(1),
+  host: z.string().trim().min(1),
+  port: z.number().int().min(1).max(65535),
+  oldFingerprint: z.string().min(1).optional(),
+  newFingerprint: z.string().regex(/^SHA256:[A-Za-z0-9+/]+={0,2}$/),
+  risk: z.enum(['first_seen', 'changed'])
+});
+
+export const hostKeyTrustConfirmationSchema = z.object({
+  profileId: z.string().min(1),
+  challengeId: z.string().uuid()
+});
+
+export const trustedHostKeySchema = hostKeyTrustChallengeSchema.pick({
+  profileId: true,
+  host: true,
+  port: true
+}).extend({
+  fingerprint: z.string().regex(/^SHA256:[A-Za-z0-9+/]+={0,2}$/),
+  trustedAt: z.string().datetime(),
+  updatedAt: z.string().datetime()
+});
+
 export const profileInputSchema = z.object({
   name: z.string().trim().min(1),
   host: z.string().trim().min(1),

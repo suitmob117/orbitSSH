@@ -1,5 +1,6 @@
 import { CredentialVault } from './credential-vault';
 import { HistoryStore } from './history-store';
+import { HostKeyStore } from './host-key-store';
 import { ProfileStore } from './profile-store';
 import { SqliteStore, type SqliteStorePort } from './sqlite-store';
 import { SshSessionManager } from './ssh-session-manager';
@@ -9,6 +10,7 @@ export interface CoreServices {
   sqliteStore: SqliteStorePort;
   profileStore: ProfileStore;
   historyStore: HistoryStore;
+  hostKeyStore: HostKeyStore;
   sessionManager: SshSessionManager;
   close(): void;
 }
@@ -25,7 +27,8 @@ export function createCoreServices(options: CoreServicesOptions = {}): CoreServi
   const sqliteStore = options.sqliteStore ?? new SqliteStore();
   const profileStore = new ProfileStore(credentialVault, { sqlite: sqliteStore });
   const historyStore = new HistoryStore({ sqlite: sqliteStore });
-  const sessionManager = new SshSessionManager(profileStore, credentialVault, historyStore);
+  const hostKeyStore = new HostKeyStore(sqliteStore);
+  const sessionManager = new SshSessionManager(profileStore, credentialVault, historyStore, hostKeyStore);
   let closed = false;
 
   return {
@@ -33,6 +36,7 @@ export function createCoreServices(options: CoreServicesOptions = {}): CoreServi
     sqliteStore,
     profileStore,
     historyStore,
+    hostKeyStore,
     sessionManager,
     close: () => {
       if (closed) return;

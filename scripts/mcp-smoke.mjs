@@ -19,6 +19,12 @@ try {
   });
 
   await client.connect(transport);
+  const tools = await client.listTools();
+  assert.equal(
+    tools.tools.some((tool) => /host.*key|fingerprint|trust|accept|replace/i.test(tool.name)),
+    false,
+    'MCP 不得暴露 SSH 主机指纹接受或替换入口'
+  );
   const result = await client.callTool({
     name: 'list_connection_profiles',
     arguments: {}
