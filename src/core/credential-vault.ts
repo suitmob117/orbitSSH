@@ -2,13 +2,18 @@ import { AsyncEntry } from '@napi-rs/keyring';
 
 const SERVICE = 'AI SSH';
 
+type CredentialEntry = Pick<AsyncEntry, 'setPassword' | 'getPassword' | 'deleteCredential'>;
+
 export class CredentialVault {
+  constructor(private readonly entryFactory: (id: string) => CredentialEntry =
+    (id) => new AsyncEntry(SERVICE, id)) {}
+
   async setSecret(id: string, value: string): Promise<void> {
     if (!value) {
       return;
     }
 
-    await new AsyncEntry(SERVICE, id).setPassword(value);
+    await this.entryFactory(id).setPassword(value);
   }
 
   async getSecret(id?: string): Promise<string | undefined> {
@@ -16,7 +21,7 @@ export class CredentialVault {
       return undefined;
     }
 
-    const value = await new AsyncEntry(SERVICE, id).getPassword();
+    const value = await this.entryFactory(id).getPassword();
     return value ?? undefined;
   }
 
@@ -25,11 +30,7 @@ export class CredentialVault {
       return;
     }
 
-    try {
-      await new AsyncEntry(SERVICE, id).deleteCredential();
-    } catch {
-      // Missing credentials are already in the desired state.
-    }
+    await this.entryFactory(id).deleteCredential();
   }
 }
 

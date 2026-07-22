@@ -4,8 +4,11 @@ import path from 'node:path';
 import type { ConnectionProfileInput, FileTransferRequest, TerminalChunk } from '@shared/types';
 import { fileTransferSchema, profileInputSchema } from '@shared/validation';
 import { createCoreServices } from '@core/services';
+import { registerElectronCleanup } from '@core/process-lifecycle';
 
-const { profileStore, historyStore, sessionManager } = createCoreServices();
+const services = createCoreServices();
+const { profileStore, historyStore, sessionManager } = services;
+registerElectronCleanup(app, services.close);
 
 let mainWindow: BrowserWindow | undefined;
 

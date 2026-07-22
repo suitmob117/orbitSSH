@@ -1,6 +1,8 @@
+import assert from 'node:assert/strict';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import Database from 'better-sqlite3';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 
@@ -28,6 +30,12 @@ try {
   }
 
   console.log(`MCP 冒烟测试通过：${profiles.length} 个连接配置`);
+  // MCP 入口必须走真实 SQLite，而不是只验证 JSON 空列表的旧路径。
+  const database = new Database(path.join(dataDir, 'ai-ssh.sqlite'), { readonly: true });
+  assert.equal(String(database.pragma('journal_mode', { simple: true })).toLowerCase(), 'wal');
+  assert.ok(database.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'profiles'").get());
+  assert.ok(database.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'command_history'").get());
+  database.close();
 } finally {
   await client.close().catch(() => undefined);
   await rm(dataDir, { recursive: true, force: true });

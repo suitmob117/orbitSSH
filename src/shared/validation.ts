@@ -1,5 +1,35 @@
 import { z } from 'zod';
 
+export const connectionProfileSchema = z.object({
+  id: z.string().min(1),
+  name: z.string().trim().min(1),
+  host: z.string().trim().min(1),
+  port: z.number().int().min(1).max(65535),
+  username: z.string().trim().min(1),
+  authMethod: z.enum(['saved_password', 'password_prompt', 'ssh_agent', 'private_key']),
+  privateKeyPath: z.string().min(1).optional(),
+  credentialId: z.string().min(1).optional(),
+  privateKeyPassphraseCredentialId: z.string().min(1).optional(),
+  connectTimeoutMs: z.number().int().min(1000).max(120000),
+  keepaliveIntervalMs: z.number().int().min(5000).max(300000),
+  jumpHost: z.string().min(1).optional(),
+  createdAt: z.string().datetime(),
+  updatedAt: z.string().datetime()
+});
+
+export const commandRecordSchema = z.object({
+  id: z.string().min(1),
+  sessionId: z.string().min(1),
+  command: z.string(),
+  startedAt: z.string().datetime(),
+  finishedAt: z.string().datetime().optional(),
+  exitCode: z.number().int().optional(),
+  signal: z.string().min(1).optional(),
+  stdoutTail: z.string(),
+  stderrTail: z.string(),
+  summary: z.string()
+});
+
 export const authorizationLevelSchema = z.enum(['ask_every_time', 'auto_readonly', 'trusted_session']);
 
 export const profileInputSchema = z.object({

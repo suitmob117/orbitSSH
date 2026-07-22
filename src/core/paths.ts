@@ -18,6 +18,12 @@ export function resolveAppDataDir(): string {
   return path.join(process.env.XDG_CONFIG_HOME ?? path.join(os.homedir(), '.config'), 'ai-ssh');
 }
 
+export const SQLITE_DATABASE_FILE = 'ai-ssh.sqlite';
+
+export function resolveSqliteDatabasePath(dataDir = resolveAppDataDir()): string {
+  return path.join(dataDir, SQLITE_DATABASE_FILE);
+}
+
 export async function ensureAppDataDir(): Promise<string> {
   const dir = resolveAppDataDir();
   await mkdir(dir, { recursive: true });
