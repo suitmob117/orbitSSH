@@ -218,16 +218,16 @@ git commit -m "feat: enforce SFTP directory boundaries"
 - 修改：`docs/codex-mcp-setup.md`、`docs/superpowers/specs/2026-07-20-codex-mcp-integration-design.md`
 - 测试：`tests/**/*.test.ts`
 
-- [ ] **步骤 1：增加中文运维说明**
+- [x] **步骤 1：增加中文运维说明**
 
 写明 SQLite 位置、WAL 文件、JSON `.bak` 只读备份、迁移失败 JSON 回退、MCP 对未知/变化指纹的拒绝行为，以及本地/远程允许目录配置规则。
 
-- [ ] **步骤 2：运行全量验证**
+- [x] **步骤 2：运行全量验证**
 
 运行：`npm.cmd test && npm.cmd run typecheck && npm.cmd run build && npm.cmd run mcp:smoke`
 预期：所有测试通过，类型检查、生产构建和 stdio 冒烟均成功。
 
-- [ ] **步骤 3：最终审查并提交**
+- [x] **步骤 3：最终审查并提交**
 
 ```bash
 git diff --check
