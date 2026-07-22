@@ -58,7 +58,9 @@ const DEFAULT_FORM: ConnectionProfileInput = {
   rememberPrivateKeyPassphrase: false,
   connectTimeoutMs: 15000,
   keepaliveIntervalMs: 15000,
-  jumpHost: ''
+  jumpHost: '',
+  localTransferRoot: '',
+  remoteTransferRoots: []
 };
 
 function healthTone(health?: string): 'green' | 'amber' | 'red' | 'neutral' {
@@ -88,7 +90,9 @@ function toProfileForm(profile: ConnectionProfile): ConnectionProfileInput {
     rememberPrivateKeyPassphrase: Boolean(profile.privateKeyPassphraseCredentialId),
     connectTimeoutMs: profile.connectTimeoutMs,
     keepaliveIntervalMs: profile.keepaliveIntervalMs,
-    jumpHost: profile.jumpHost ?? ''
+    jumpHost: profile.jumpHost ?? '',
+    localTransferRoot: profile.localTransferRoot ?? '',
+    remoteTransferRoots: profile.remoteTransferRoots ?? []
   };
 }
 
@@ -544,6 +548,24 @@ export function App(): JSX.Element {
                   type="number"
                   value={form.keepaliveIntervalMs}
                   onChange={(event) => setForm({ ...form, keepaliveIntervalMs: Number(event.target.value) })}
+                />
+              </Field>
+              <Field label="本地文件允许目录">
+                <Input
+                  placeholder="例如 C:\\Users\\你的用户名\\Downloads"
+                  value={form.localTransferRoot ?? ''}
+                  onChange={(event) => setForm({ ...form, localTransferRoot: event.target.value })}
+                />
+              </Field>
+              <Field label="远程文件允许目录（每行一个）">
+                <textarea
+                  className="h-20 w-full resize-none rounded-lg border border-input bg-background p-2 font-mono text-xs text-foreground outline-none transition-all placeholder:text-muted-foreground/60 hover:border-primary/40 focus:border-primary focus:ring-2 focus:ring-primary/20"
+                  placeholder={'例如\n/srv/app\n/var/log/app'}
+                  value={(form.remoteTransferRoots ?? []).join('\n')}
+                  onChange={(event) => setForm({
+                    ...form,
+                    remoteTransferRoots: event.target.value.split(/\r?\n/).map((root) => root.trim()).filter(Boolean)
+                  })}
                 />
               </Field>
             </div>

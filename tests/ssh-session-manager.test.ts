@@ -8,6 +8,7 @@ import { HistoryStore } from '../src/core/history-store';
 import { ProfileStore } from '../src/core/profile-store';
 import { SshSessionManager } from '../src/core/ssh-session-manager';
 import type { HostKeyStorePort } from '../src/core/host-key-store';
+import type { FileBoundaryPort } from '../src/core/file-boundary';
 import type {
   AuthorizationLevel,
   ConnectionProfile,
@@ -141,7 +142,8 @@ class MemoryHostKeyStore implements HostKeyStorePort {
 
 function createHarness(
   authorizationLevel: AuthorizationLevel,
-  profileOverrides: Partial<ConnectionProfile> = {}
+  profileOverrides: Partial<ConnectionProfile> = {},
+  fileBoundary: FileBoundaryPort = { resolve: async ({ localPath, remotePath }) => ({ localPath, remotePath }) }
 ) {
   const client = new FakeClient();
   const historyRecords: Omit<CommandRecord, 'id'>[] = [];
@@ -174,7 +176,8 @@ function createHarness(
     credentials,
     history,
     hostKeys,
-    () => client as unknown as Client
+    () => client as unknown as Client,
+    () => fileBoundary
   );
 
   return { client, historyRecords, hostKeys, manager, profile, authorizationLevel };
@@ -417,6 +420,27 @@ test('auto readonly rejects uploads before opening SFTP without exposing paths',
 
   assert.equal(harness.client.sftpCalls, 0);
   assert.deepEqual(harness.client.operations, []);
+});
+
+test('路径检查失败时在打开 SFTP 前拒绝传输', async () => {
+  const fileBoundary: FileBoundaryPort = {
+    resolve: async () => {
+      throw new Error('本地文件路径不在允许目录内');
+    }
+  };
+  const harness = createHarness('ask_every_time', {}, fileBoundary);
+  const session = await harness.manager.openSession('profile-1', harness.authorizationLevel);
+
+  await assert.rejects(
+    harness.manager.transferFile({
+      sessionId: session.id,
+      direction: 'upload',
+      localPath: '/local/report.txt',
+      remotePath: '/srv/app/report.txt'
+    }),
+    /允许目录/
+  );
+  assert.equal(harness.client.sftpCalls, 0);
 });
 
 test('auto readonly allows readonly commands and downloads through remote interfaces', async () => {

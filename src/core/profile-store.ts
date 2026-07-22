@@ -42,6 +42,7 @@ export class ProfileStore {
     const now = new Date().toISOString();
     const existing = id ? profiles.find((item) => item.id === id) : undefined;
     const profileId = id ?? randomUUID();
+    const remoteTransferRoots = parsed.remoteTransferRoots?.map((root) => root.trim()).filter(Boolean);
     const passwordCredentialId = credentialId(profileId, 'password');
     const passphraseCredentialId = credentialId(profileId, 'private-key-passphrase');
 
@@ -88,6 +89,8 @@ export class ProfileStore {
         connectTimeoutMs: parsed.connectTimeoutMs,
         keepaliveIntervalMs: parsed.keepaliveIntervalMs,
         jumpHost: parsed.jumpHost?.trim() || undefined,
+        localTransferRoot: parsed.localTransferRoot?.trim() || undefined,
+        remoteTransferRoots: remoteTransferRoots?.length ? remoteTransferRoots : undefined,
         createdAt: existing?.createdAt ?? now,
         updatedAt: now
       };

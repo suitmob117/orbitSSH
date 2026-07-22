@@ -20,6 +20,7 @@ import {
 } from './command-policy';
 import { redactCommand } from './command-redaction';
 import { CredentialVault } from './credential-vault';
+import { FileBoundary, type FileBoundaryPort } from './file-boundary';
 import { HistoryStore } from './history-store';
 import type { HostKeyStorePort } from './host-key-store';
 import { ProfileStore } from './profile-store';
@@ -61,7 +62,12 @@ export class SshSessionManager extends EventEmitter {
     private readonly credentials: CredentialVault,
     private readonly history: HistoryStore,
     private readonly hostKeys: HostKeyStorePort,
-    private readonly clientFactory: () => Client = () => new Client()
+    private readonly clientFactory: () => Client = () => new Client(),
+    private readonly fileBoundaryForProfile: (profile: ConnectionProfile) => FileBoundaryPort = (profile) =>
+      new FileBoundary({
+        localRoot: profile.localTransferRoot,
+        remoteRoots: profile.remoteTransferRoots ?? []
+      })
   ) {
     super();
   }
@@ -242,6 +248,7 @@ export class SshSessionManager extends EventEmitter {
   async transferFile(request: FileTransferRequest): Promise<FileTransferResult> {
     const managed = this.getManaged(request.sessionId);
     enforceTransferAuthorization(managed.session.authorizationLevel, request.direction);
+    const resolvedPaths = await this.fileBoundaryForProfile(managed.profile).resolve(request);
     const startedAt = new Date().toISOString();
 
     await new Promise<void>((resolve, reject) => {
@@ -261,9 +268,9 @@ export class SshSessionManager extends EventEmitter {
         };
 
         if (request.direction === 'upload') {
-          sftp.fastPut(request.localPath, request.remotePath, callback);
+          sftp.fastPut(resolvedPaths.localPath, resolvedPaths.remotePath, callback);
         } else {
-          sftp.fastGet(request.remotePath, request.localPath, callback);
+          sftp.fastGet(resolvedPaths.remotePath, resolvedPaths.localPath, callback);
         }
       });
     });
@@ -271,8 +278,8 @@ export class SshSessionManager extends EventEmitter {
     return {
       id: randomUUID(),
       direction: request.direction,
-      localPath: request.localPath,
-      remotePath: request.remotePath,
+      localPath: resolvedPaths.localPath,
+      remotePath: resolvedPaths.remotePath,
       startedAt,
       finishedAt: new Date().toISOString()
     };

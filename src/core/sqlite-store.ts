@@ -116,7 +116,7 @@ export class SqliteStore implements SqliteStorePort {
     return this.runDatabase(() => this.requireDatabase().prepare(`
       SELECT id, name, host, port, username, auth_method, private_key_path, credential_id,
         private_key_passphrase_credential_id, connect_timeout_ms, keepalive_interval_ms,
-        jump_host, created_at, updated_at
+        jump_host, local_transfer_root, remote_transfer_roots, created_at, updated_at
       FROM profiles ORDER BY rowid
     `).all().map((row) => this.toProfile(row as Record<string, unknown>)));
   }
@@ -145,11 +145,11 @@ export class SqliteStore implements SqliteStorePort {
         INSERT INTO profiles (
           id, name, host, port, username, auth_method, private_key_path, credential_id,
           private_key_passphrase_credential_id, connect_timeout_ms, keepalive_interval_ms,
-          jump_host, created_at, updated_at
+          jump_host, local_transfer_root, remote_transfer_roots, created_at, updated_at
         ) VALUES (
           @id, @name, @host, @port, @username, @authMethod, @privateKeyPath, @credentialId,
           @privateKeyPassphraseCredentialId, @connectTimeoutMs, @keepaliveIntervalMs,
-          @jumpHost, @createdAt, @updatedAt
+          @jumpHost, @localTransferRoot, @remoteTransferRoots, @createdAt, @updatedAt
         ) ON CONFLICT(id) DO UPDATE SET
           name = excluded.name,
           host = excluded.host,
@@ -162,6 +162,8 @@ export class SqliteStore implements SqliteStorePort {
           connect_timeout_ms = excluded.connect_timeout_ms,
           keepalive_interval_ms = excluded.keepalive_interval_ms,
           jump_host = excluded.jump_host,
+          local_transfer_root = excluded.local_transfer_root,
+          remote_transfer_roots = excluded.remote_transfer_roots,
           updated_at = excluded.updated_at
         `).run(this.profileParameters(validated));
       });
@@ -273,6 +275,8 @@ export class SqliteStore implements SqliteStorePort {
         connect_timeout_ms INTEGER NOT NULL,
         keepalive_interval_ms INTEGER NOT NULL,
         jump_host TEXT,
+        local_transfer_root TEXT,
+        remote_transfer_roots TEXT NOT NULL DEFAULT '[]',
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
@@ -301,6 +305,18 @@ export class SqliteStore implements SqliteStorePort {
         value TEXT NOT NULL
       );
     `);
+    this.ensureProfileTransferColumns();
+  }
+
+  private ensureProfileTransferColumns(): void {
+    const columns = this.requireDatabase().prepare('PRAGMA table_info(profiles)').all() as Array<{ name: string }>;
+    const names = new Set(columns.map((column) => column.name));
+    if (!names.has('local_transfer_root')) {
+      this.requireDatabase().exec('ALTER TABLE profiles ADD COLUMN local_transfer_root TEXT');
+    }
+    if (!names.has('remote_transfer_roots')) {
+      this.requireDatabase().exec("ALTER TABLE profiles ADD COLUMN remote_transfer_roots TEXT NOT NULL DEFAULT '[]'");
+    }
   }
 
   private configureDatabase(): void {
@@ -382,11 +398,11 @@ export class SqliteStore implements SqliteStorePort {
       INSERT INTO profiles (
         id, name, host, port, username, auth_method, private_key_path, credential_id,
         private_key_passphrase_credential_id, connect_timeout_ms, keepalive_interval_ms,
-        jump_host, created_at, updated_at
+        jump_host, local_transfer_root, remote_transfer_roots, created_at, updated_at
       ) VALUES (
         @id, @name, @host, @port, @username, @authMethod, @privateKeyPath, @credentialId,
         @privateKeyPassphraseCredentialId, @connectTimeoutMs, @keepaliveIntervalMs,
-        @jumpHost, @createdAt, @updatedAt
+        @jumpHost, @localTransferRoot, @remoteTransferRoots, @createdAt, @updatedAt
       )
     `);
     const insertHistory = db.prepare(`
@@ -651,6 +667,9 @@ export class SqliteStore implements SqliteStorePort {
     this.assignOptional(profile, 'credentialId', row.credential_id);
     this.assignOptional(profile, 'privateKeyPassphraseCredentialId', row.private_key_passphrase_credential_id);
     this.assignOptional(profile, 'jumpHost', row.jump_host);
+    this.assignOptional(profile, 'localTransferRoot', row.local_transfer_root);
+    const remoteTransferRoots = this.parseRemoteTransferRoots(row.remote_transfer_roots);
+    if (remoteTransferRoots) profile.remoteTransferRoots = remoteTransferRoots;
     return connectionProfileSchema.parse(profile);
   }
 
@@ -685,6 +704,18 @@ export class SqliteStore implements SqliteStorePort {
     if (typeof value === 'string') target[key] = value;
   }
 
+  private parseRemoteTransferRoots(value: unknown): string[] | undefined {
+    if (typeof value !== 'string') return undefined;
+    try {
+      const parsed: unknown = JSON.parse(value);
+      return Array.isArray(parsed) && parsed.every((item) => typeof item === 'string') && parsed.length > 0
+        ? parsed
+        : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
   private profileParameters(profile: ConnectionProfile): Record<string, string | number | null> {
     return {
       id: profile.id,
@@ -699,6 +730,8 @@ export class SqliteStore implements SqliteStorePort {
       connectTimeoutMs: profile.connectTimeoutMs,
       keepaliveIntervalMs: profile.keepaliveIntervalMs,
       jumpHost: profile.jumpHost ?? null,
+      localTransferRoot: profile.localTransferRoot ?? null,
+      remoteTransferRoots: JSON.stringify(profile.remoteTransferRoots ?? []),
       createdAt: profile.createdAt,
       updatedAt: profile.updatedAt
     };

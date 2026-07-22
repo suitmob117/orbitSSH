@@ -173,7 +173,7 @@ git commit -m "feat: verify SSH host fingerprints"
 - 修改：`src/shared/types.ts`、`src/shared/validation.ts`、`src/core/ssh-session-manager.ts`、`src/mcp/server.ts`
 - 测试：`tests/file-boundary.test.ts`、`tests/ssh-session-manager.test.ts`
 
-- [ ] **步骤 1：写出失败的路径逃逸测试**
+- [x] **步骤 1：写出失败的路径逃逸测试**
 
 ```ts
 test('rejects local traversal, symlink escape, case bypass and remote traversal', async () => {
@@ -183,12 +183,12 @@ test('rejects local traversal, symlink escape, case bypass and remote traversal'
 });
 ```
 
-- [ ] **步骤 2：运行测试确认失败**
+- [x] **步骤 2：运行测试确认失败**
 
 运行：`npm.cmd test -- tests/file-boundary.test.ts`
 预期：失败，当前 SFTP 直接使用调用方路径。
 
-- [ ] **步骤 3：实现本地真实路径与远程 POSIX 路径检查**
+- [x] **步骤 3：实现本地真实路径与远程 POSIX 路径检查**
 
 ```ts
 const candidate = await realpath(localPath);
@@ -200,12 +200,12 @@ if (!allowedRemoteRoots.some((root) => isRemoteContained(root, remote))) throw n
 
 上传和下载在 `sftp.fastPut/fastGet` 前执行。下载目标验证父目录，拒绝父目录不存在与符号链接逃逸。
 
-- [ ] **步骤 4：运行路径与会话测试**
+- [x] **步骤 4：运行路径与会话测试**
 
 运行：`npm.cmd test -- tests/file-boundary.test.ts tests/ssh-session-manager.test.ts`
 预期：通过。
 
-- [ ] **步骤 5：提交**
+- [x] **步骤 5：提交**
 
 ```bash
 git add src/core/file-boundary.ts src/shared/types.ts src/shared/validation.ts src/core/ssh-session-manager.ts src/mcp/server.ts tests/file-boundary.test.ts tests/ssh-session-manager.test.ts

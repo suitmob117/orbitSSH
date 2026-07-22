@@ -73,12 +73,12 @@ server.registerTool(
 server.registerTool(
   'upload_file',
   {
-    title: 'Upload file',
-    description: 'Upload a local file to a remote path through an existing SSH session.',
+    title: '上传文件',
+    description: '通过现有 SSH 会话上传文件。路径必须位于该连接配置的本地与远程允许目录内。',
     inputSchema: {
-      sessionId: z.string(),
-      localPath: z.string(),
-      remotePath: z.string()
+      sessionId: z.string().describe('现有 SSH 会话 ID'),
+      localPath: z.string().describe('本地文件路径，必须位于连接配置的本地允许目录内'),
+      remotePath: z.string().describe('远程 POSIX 路径，必须位于连接配置的远程允许目录内')
     }
   },
   async ({ sessionId, localPath, remotePath }) =>
@@ -88,12 +88,12 @@ server.registerTool(
 server.registerTool(
   'download_file',
   {
-    title: 'Download file',
-    description: 'Download a remote file to a local path through an existing SSH session.',
+    title: '下载文件',
+    description: '通过现有 SSH 会话下载文件。路径必须位于该连接配置的本地与远程允许目录内。',
     inputSchema: {
-      sessionId: z.string(),
-      remotePath: z.string(),
-      localPath: z.string()
+      sessionId: z.string().describe('现有 SSH 会话 ID'),
+      remotePath: z.string().describe('远程 POSIX 路径，必须位于连接配置的远程允许目录内'),
+      localPath: z.string().describe('本地目标路径，父目录必须真实存在且位于连接配置的本地允许目录内')
     }
   },
   async ({ sessionId, remotePath, localPath }) =>

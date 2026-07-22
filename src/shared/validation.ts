@@ -13,6 +13,8 @@ export const connectionProfileSchema = z.object({
   connectTimeoutMs: z.number().int().min(1000).max(120000),
   keepaliveIntervalMs: z.number().int().min(5000).max(300000),
   jumpHost: z.string().min(1).optional(),
+  localTransferRoot: z.string().trim().min(1).optional(),
+  remoteTransferRoots: z.array(z.string().trim().min(1)).optional(),
   createdAt: z.string().datetime(),
   updatedAt: z.string().datetime()
 });
@@ -69,7 +71,9 @@ export const profileInputSchema = z.object({
   rememberPrivateKeyPassphrase: z.boolean().optional(),
   connectTimeoutMs: z.number().int().min(1000).max(120000),
   keepaliveIntervalMs: z.number().int().min(5000).max(300000),
-  jumpHost: z.string().optional()
+  jumpHost: z.string().optional(),
+  localTransferRoot: z.string().trim().min(1).optional(),
+  remoteTransferRoots: z.array(z.string().trim().min(1)).optional()
 });
 
 export const fileTransferSchema = z.object({

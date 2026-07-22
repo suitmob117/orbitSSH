@@ -19,7 +19,9 @@ const profileInput = {
   username: 'root',
   authMethod: 'ssh_agent' as const,
   connectTimeoutMs: 10_000,
-  keepaliveIntervalMs: 15_000
+  keepaliveIntervalMs: 15_000,
+  localTransferRoot: 'C:\\Users\\tester\\Downloads',
+  remoteTransferRoots: ['/srv/app', '/var/log/app']
 };
 
 const historyInput = {

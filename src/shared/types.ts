@@ -17,6 +17,8 @@ export interface ConnectionProfile {
   connectTimeoutMs: number;
   keepaliveIntervalMs: number;
   jumpHost?: string;
+  localTransferRoot?: string;
+  remoteTransferRoots?: string[];
   createdAt: string;
   updatedAt: string;
 }
@@ -34,6 +36,8 @@ export interface ConnectionProfileInput {
   connectTimeoutMs: number;
   keepaliveIntervalMs: number;
   jumpHost?: string;
+  localTransferRoot?: string;
+  remoteTransferRoots?: string[];
 }
 
 export interface ConnectionSession {
