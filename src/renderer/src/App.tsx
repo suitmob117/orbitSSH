@@ -13,6 +13,7 @@ import {
   Power,
   RefreshCw,
   Moon,
+  Monitor,
   Save,
   Sun,
   TerminalSquare,
@@ -45,6 +46,20 @@ const AUTH_LEVEL_LABELS: Record<AuthorizationLevel, string> = {
   auto_readonly: '自动只读',
   trusted_session: '信任会话'
 };
+
+type ThemePreference = 'system' | 'light' | 'dark';
+
+const THEME_STORAGE_KEY = 'ai-ssh:theme-preference';
+
+function getInitialThemePreference(): ThemePreference {
+  const stored = window.localStorage.getItem(THEME_STORAGE_KEY);
+  return stored === 'system' || stored === 'light' || stored === 'dark' ? stored : 'system';
+}
+
+function resolveTheme(preference: ThemePreference): 'light' | 'dark' {
+  if (preference !== 'system') return preference;
+  return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+}
 
 const DEFAULT_FORM: ConnectionProfileInput = {
   name: '',
@@ -194,7 +209,7 @@ export function App(): JSX.Element {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string>();
   const [hostKeyChallenges, setHostKeyChallenges] = useState<HostKeyTrustChallenge[]>([]);
-  const [theme, setTheme] = useState<'light' | 'dark'>('light');
+  const [themePreference, setThemePreference] = useState<ThemePreference>(getInitialThemePreference);
 
   const selectedProfile = profiles.find((profile) => profile.id === selectedProfileId);
   const activeSession = useMemo(() => {
@@ -227,8 +242,19 @@ export function App(): JSX.Element {
   }, []);
 
   useEffect(() => {
-    document.documentElement.classList.toggle('dark', theme === 'dark');
-  }, [theme]);
+    const media = window.matchMedia('(prefers-color-scheme: dark)');
+    const applyTheme = () => {
+      const theme = resolveTheme(themePreference);
+      document.documentElement.classList.toggle('dark', theme === 'dark');
+      document.documentElement.style.colorScheme = theme;
+    };
+    applyTheme();
+    window.localStorage.setItem(THEME_STORAGE_KEY, themePreference);
+    if (themePreference === 'system') {
+      media.addEventListener('change', applyTheme);
+      return () => media.removeEventListener('change', applyTheme);
+    }
+  }, [themePreference]);
 
   useEffect(() => {
     if (activeSession) {
@@ -346,24 +372,29 @@ export function App(): JSX.Element {
   const hostKeyChallenge = hostKeyChallenges.find((challenge) => challenge.profileId === selectedProfileId);
 
   return (
-    <div className="grid h-full grid-cols-[280px_1fr_340px] grid-rows-[1fr_auto] overflow-hidden">
-      <aside className="glass border-r border-border/60">
+    <div className="ai-ssh-workbench">
+      <header className="workbench-topbar">
+        <div className="workbench-brand">
+          <div className="workbench-brand-mark"><img src="/icon.png" alt="AI SSH" /></div>
+          <div><strong>AI SSH</strong><span>COLLABORATIVE TERMINAL</span></div>
+        </div>
+        <div className="workbench-crumb">
+          <span>工作空间</span><i>/</i><span>连接会话</span><i>/</i><b>{selectedProfile?.name ?? '未选择服务器'}</b>
+        </div>
+        <div className="workbench-top-actions">
+          <span className="mcp-ready"><i />本地 MCP 已就绪</span>
+          <ThemeButton active={themePreference === 'system'} label="跟随系统" onClick={() => setThemePreference('system')}><Monitor className="h-3.5 w-3.5" /></ThemeButton>
+          <ThemeButton active={themePreference === 'light'} label="浅色主题" onClick={() => setThemePreference('light')}><Sun className="h-3.5 w-3.5" /></ThemeButton>
+          <ThemeButton active={themePreference === 'dark'} label="深色主题" onClick={() => setThemePreference('dark')}><Moon className="h-3.5 w-3.5" /></ThemeButton>
+        </div>
+      </header>
+      <div className="workbench-grid">
+      <aside className="workbench-sidebar glass border-r border-border/60">
         <div className="flex h-16 items-center gap-3 border-b border-border/60 px-4">
-          <div className="flex h-9 w-9 items-center justify-center overflow-hidden rounded-lg shadow-glow-sm ring-1 ring-border">
-            <img src="/icon.png" alt="AI SSH" className="h-full w-full object-cover" />
-          </div>
           <div className="min-w-0">
-            <div className="text-sm font-semibold tracking-wide text-gradient">AI SSH</div>
-            <div className="truncate text-xs text-muted-foreground">本地持久连接工作台</div>
+            <div className="text-[9px] font-medium tracking-[0.2em] text-muted-foreground">NETWORK ATLAS</div>
+            <div className="mt-1 text-sm font-semibold tracking-wide text-foreground">服务器星图</div>
           </div>
-          <button
-            type="button"
-            onClick={() => setTheme((value) => (value === 'dark' ? 'light' : 'dark'))}
-            className="ml-auto inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-border bg-card text-muted-foreground transition-all duration-200 hover:border-primary/40 hover:text-foreground"
-            title="切换深色 / 浅色主题"
-          >
-            {theme === 'dark' ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
-          </button>
         </div>
         <div className="space-y-2 p-3">
           <SecondaryButton
@@ -405,7 +436,7 @@ export function App(): JSX.Element {
         </div>
       </aside>
 
-      <main className="min-w-0 overflow-auto p-5">
+      <main className="workbench-stage min-w-0 overflow-auto p-5">
         <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
           <div className="min-w-[220px] flex-1">
             <h1 className="text-2xl font-bold tracking-tight text-gradient">{selectedProfile?.name ?? '连接配置'}</h1>
@@ -622,7 +653,7 @@ export function App(): JSX.Element {
         </section>
       </main>
 
-      <aside className="glass border-l border-border/60 p-4">
+      <aside className="workbench-copilot glass border-l border-border/60 p-4">
         <div className="mb-4">
           <h2 className="text-sm font-semibold tracking-wide text-foreground/90">会话状态</h2>
           <div className="mt-3 space-y-2 text-sm">
@@ -673,12 +704,13 @@ export function App(): JSX.Element {
         </div>
       </aside>
 
-      <div className={cn('col-span-3 glass border-t border-border/60 p-3', terminalOpen ? 'block' : 'hidden')}>
+      <div className={cn('workbench-terminal glass border-t border-border/60 p-3', terminalOpen ? 'block' : 'hidden')}>
         <div className="mb-2 flex items-center gap-2 text-sm font-medium">
           <CheckCircle2 className="h-4 w-4 text-emerald-500 dark:text-emerald-400" />
           会话终端
         </div>
         <div className="h-[260px]">{terminalOpen ? <TerminalPanel session={activeSession} /> : null}</div>
+      </div>
       </div>
     </div>
   );
@@ -699,6 +731,34 @@ function InfoRow({ label, value }: { label: string; value: string }): JSX.Elemen
       <span className="text-muted-foreground">{label}</span>
       <span className="truncate font-medium">{value}</span>
     </div>
+  );
+}
+
+function ThemeButton({
+  active,
+  label,
+  children,
+  onClick
+}: {
+  active: boolean;
+  label: string;
+  children: React.ReactNode;
+  onClick: () => void;
+}): JSX.Element {
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      title={label}
+      aria-pressed={active}
+      onClick={onClick}
+      className={cn(
+        'inline-flex h-7 w-7 items-center justify-center rounded-md transition-all duration-200',
+        active ? 'bg-primary text-primary-foreground shadow-glow-sm' : 'text-muted-foreground hover:bg-muted hover:text-foreground'
+      )}
+    >
+      {children}
+    </button>
   );
 }
 
