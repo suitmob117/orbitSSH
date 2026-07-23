@@ -1,6 +1,6 @@
 # Product Scope
 
-AI SSH is a Chinese-language local desktop app for stable, reusable SSH work controlled by a local AI client through MCP.
+OrbitSSH is a Chinese-language local desktop app for stable, reusable SSH work controlled by a local AI client through MCP.
 
 ## First-Version Layout
 

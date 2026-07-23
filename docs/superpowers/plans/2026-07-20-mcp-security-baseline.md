@@ -2,9 +2,9 @@
 
 > **面向执行代理：** 必须使用 `superpowers:subagent-driven-development`（推荐）或 `superpowers:executing-plans`，严格按任务顺序执行并逐项勾选。
 
-**目标：** 为 AI SSH 建立可重复运行的测试基础，在 MCP 服务端真正强制执行会话授权等级，并用生产构建完成一次真实 stdio MCP 调用。
+**目标：** 为 OrbitSSH 建立可重复运行的测试基础，在 MCP 服务端真正强制执行会话授权等级，并用生产构建完成一次真实 stdio MCP 调用。
 
-**架构：** 将授权判断集中在纯函数模块 `command-policy.ts`，SSH 会话管理器只负责在远程命令或 SFTP 开始前调用策略并拒绝未授权操作。Codex 继续负责工具调用审批，AI SSH 服务端负责不可绕过的 `auto_readonly` 边界。生产构建通过独立冒烟脚本启动并调用，避免只验证 TypeScript 编译而没有验证 MCP 协议链路。
+**架构：** 将授权判断集中在纯函数模块 `command-policy.ts`，SSH 会话管理器只负责在远程命令或 SFTP 开始前调用策略并拒绝未授权操作。Codex 继续负责工具调用审批，OrbitSSH 服务端负责不可绕过的 `auto_readonly` 边界。生产构建通过独立冒烟脚本启动并调用，避免只验证 TypeScript 编译而没有验证 MCP 协议链路。
 
 **技术栈：** TypeScript、Node.js 22 内置测试运行器、tsx、ssh2、Model Context Protocol SDK、Electron Vite、tsup。
 

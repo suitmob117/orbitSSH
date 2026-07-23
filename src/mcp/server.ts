@@ -19,7 +19,7 @@ function text(value: unknown) {
 }
 
 const server = new McpServer({
-  name: 'ai-ssh',
+  name: 'orbitssh',
   version: '0.1.0'
 });
 
@@ -27,7 +27,7 @@ server.registerTool(
   'list_connection_profiles',
   {
     title: 'List connection profiles',
-    description: 'List saved AI SSH connection profiles without secrets.'
+    description: 'List saved OrbitSSH connection profiles without secrets.'
   },
   async () => text(await services.profileStore.list())
 );
@@ -49,7 +49,7 @@ server.registerTool(
   'get_session_health',
   {
     title: 'Get session health',
-    description: 'Check whether an AI SSH connection session is connected, degraded, or disconnected.',
+    description: 'Check whether an OrbitSSH connection session is connected, degraded, or disconnected.',
     inputSchema: {
       sessionId: z.string()
     }
@@ -104,7 +104,7 @@ server.registerTool(
   'close_connection_session',
   {
     title: 'Close connection session',
-    description: 'Close a persistent AI SSH connection session explicitly.',
+    description: 'Close a persistent OrbitSSH connection session explicitly.',
     inputSchema: {
       sessionId: z.string()
     }

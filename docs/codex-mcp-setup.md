@@ -1,10 +1,10 @@
 # Codex MCP 本地接入指南
 
-本指南将开发目录中的 AI SSH MCP 服务接入 Codex。它适用于本机开发和验证；正式的 Plugin、Marketplace 或一键安装流程属于后续阶段。
+本指南将开发目录中的 OrbitSSH MCP 服务接入 Codex。它适用于本机开发和验证；正式的 Plugin、Marketplace 或一键安装流程属于后续阶段。
 
 ## 接入前准备
 
-请先在 AI SSH 开发目录构建生产产物：
+请先在 OrbitSSH 开发目录构建生产产物：
 
 ```powershell
 cd D:\Code\ai-ssh
@@ -24,17 +24,17 @@ D:\Code\ai-ssh\dist\mcp\server.js
 构建成功后，执行以下命令注册本地 MCP 服务：
 
 ```powershell
-codex mcp add ai_ssh -- node D:\Code\ai-ssh\dist\mcp\server.js
+codex mcp add orbitssh -- node D:\Code\ai-ssh\dist\mcp\server.js
 ```
 
 随后检查注册结果和当前可用的 MCP 服务：
 
 ```powershell
-codex mcp get ai_ssh
+codex mcp get orbitssh
 codex mcp list
 ```
 
-如果需要重新注册，先按 Codex CLI 的当前帮助移除或替换已有的 `ai_ssh` 条目，再重复上面的注册和检查步骤。
+如果需要重新注册，先按 Codex CLI 的当前帮助移除或替换旧的 `ai_ssh` 条目，再注册新的 `orbitssh` 条目并重复上面的检查步骤。
 
 ## 可用工具与审批
 
@@ -68,7 +68,7 @@ codex mcp list
 
 ## 数据迁移、主机指纹与文件传输边界
 
-在 Windows 上，AI SSH 默认将非敏感数据保存在：
+为保证改名前后的数据连续性，OrbitSSH 在 Windows 上继续从原兼容目录读取非敏感数据：
 
 ```text
 %APPDATA%\AI SSH\ai-ssh.sqlite
@@ -101,7 +101,7 @@ npm.cmd run mcp:smoke
 ## 常见故障
 
 - `codex mcp add` 找不到入口：先重新执行 `npm.cmd run build`，并确认 `D:\Code\ai-ssh\dist\mcp\server.js` 存在。
-- Codex 无法启动服务：使用 `codex mcp get ai_ssh` 检查命令是否为 `node D:\Code\ai-ssh\dist\mcp\server.js`，然后重新注册。
+- Codex 无法启动服务：使用 `codex mcp get orbitssh` 检查命令是否为 `node D:\Code\ai-ssh\dist\mcp\server.js`，然后重新注册。
 - 冒烟验证失败：先执行 `npm.cmd run build`，再执行 `npm.cmd run mcp:smoke`；查看命令输出中的 Node.js 或依赖错误。
 - `auto_readonly` 下命令被拒绝：改用明确的单条只读检查命令，避免 `&&`、`|`、重定向和其他复合 Shell 语法；需要写入时改用经过人工审批的授权流程。
-- 看不到连接配置：先在 AI SSH 桌面应用中创建配置，并确认当前 Windows 用户可访问相应的 Windows 凭据管理器条目。
+- 看不到连接配置：先在 OrbitSSH 桌面应用中创建配置，并确认当前 Windows 用户可访问相应的 Windows 凭据管理器条目。

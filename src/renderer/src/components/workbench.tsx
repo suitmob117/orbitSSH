@@ -113,7 +113,7 @@ export function AppTopbar({
     <header className="workbench-topbar">
       <div className="workbench-brand">
         <div className="workbench-brand-mark"><img src="/icon.png" alt="" /></div>
-        <div><strong>AI SSH</strong><span>COLLABORATIVE TERMINAL</span></div>
+        <div><strong>OrbitSSH</strong><span>COLLABORATIVE TERMINAL</span></div>
       </div>
       <div className="workbench-crumb">
         <span>工作空间</span><i>/</i><span>连接会话</span><i>/</i>

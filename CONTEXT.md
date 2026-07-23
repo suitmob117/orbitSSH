@@ -1,6 +1,6 @@
-# AI SSH
+# OrbitSSH
 
-AI SSH is a desktop-oriented SSH operations tool for making remote server access easier, safer, and more recoverable for an AI-assisted operator.
+OrbitSSH is a desktop-oriented SSH operations tool for making remote server access easier, safer, and more recoverable for an AI-assisted operator.
 
 ## Language
 
@@ -21,7 +21,7 @@ A one-time operator interaction used to complete SSH authentication when no save
 _Avoid_: Login form
 
 **Saved Credential**:
-A password or passphrase stored in the operating system credential vault and referenced by AI SSH without writing the secret into app configuration.
+A password or passphrase stored in the operating system credential vault and referenced by OrbitSSH without writing the secret into app configuration.
 _Avoid_: Plaintext password, config secret
 
 **Authorization Level**:
@@ -29,11 +29,11 @@ The operator-selected policy that controls which AI-proposed remote actions can 
 _Avoid_: Permission mode, safety setting
 
 **Local AI Client**:
-An AI assistant running on the operator's computer that asks AI SSH to perform remote server actions without configuring model credentials inside AI SSH.
+An AI assistant running on the operator's computer that asks OrbitSSH to perform remote server actions without configuring model credentials inside OrbitSSH.
 _Avoid_: Built-in AI, hosted agent
 
 **Tool Interface**:
-The local, controlled entry point that lets a local AI client use AI SSH's connection sessions, command execution, file transfer, and health checks.
+The local, controlled entry point that lets a local AI client use OrbitSSH's connection sessions, command execution, file transfer, and health checks.
 _Avoid_: API backend, model provider
 
 **Session History**:

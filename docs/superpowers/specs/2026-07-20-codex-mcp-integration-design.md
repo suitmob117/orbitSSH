@@ -1,8 +1,8 @@
-# AI SSH Windows 桌面应用、MCP 与 Codex Plugin 一体化设计
+# OrbitSSH Windows 桌面应用、MCP 与 Codex Plugin 一体化设计
 
 ## 一、产品定位
 
-AI SSH 是一款面向 Windows 的 AI 原生 SSH 桌面工具，同时服务两类操作方式：
+OrbitSSH 是一款面向 Windows 的 AI 原生 SSH 桌面工具，同时服务两类操作方式：
 
 - 用户通过图形化界面完成日常服务器连接、终端操作、文件传输和历史查看；
 - Codex 通过 Plugin 和本地 MCP Runtime，复用相同的连接配置、安全策略与凭据引用，在用户可见且可控的范围内操作服务器。
@@ -13,9 +13,9 @@ AI SSH 是一款面向 Windows 的 AI 原生 SSH 桌面工具，同时服务两�
 
 首个正式版本只支持 Windows x64，交付一个一体化安装包，包含：
 
-- AI SSH 桌面应用；
+- OrbitSSH 桌面应用；
 - 可由 Codex 按需启动的独立 MCP Runtime；
-- AI SSH Codex Plugin；
+- OrbitSSH Codex Plugin；
 - 本地 Codex Plugin Marketplace 清单；
 - 安装、诊断、修复、更新和卸载能力。
 
@@ -25,20 +25,20 @@ AI SSH 是一款面向 Windows 的 AI 原生 SSH 桌面工具，同时服务两�
 
 ```text
 Windows 安装包
-├─ AI SSH 桌面应用
+├─ OrbitSSH 桌面应用
 │  ├─ 服务器与分组管理
 │  ├─ 会话终端
 │  ├─ 文件传输
 │  ├─ AI 操作与审批可视化
 │  ├─ 历史与恢复点
 │  └─ Codex 集成管理
-├─ AI SSH MCP Runtime
+├─ OrbitSSH MCP Runtime
 │  ├─ 连接配置查询
 │  ├─ SSH 会话生命周期
 │  ├─ 命令风险与授权执行
 │  ├─ 有边界的文件传输
 │  └─ 健康检查与历史记录
-└─ AI SSH Codex Plugin
+└─ OrbitSSH Codex Plugin
    ├─ 中文 SSH 操作 Skill
    ├─ MCP 注册信息
    ├─ 安全操作规范
@@ -60,7 +60,7 @@ Windows 安装包采用 NSIS，普通用户不需要预装 Node.js。首次启�
 3. 展示“启用 Codex 集成”，由用户主动确认；
 4. 备份当前 Codex 配置；
 5. 通过 Codex 官方命令注册安装包内的本地 Marketplace；
-6. 安装 AI SSH Plugin 并注册 MCP Runtime 的绝对路径；
+6. 安装 OrbitSSH Plugin 并注册 MCP Runtime 的绝对路径；
 7. 调用 `list_connection_profiles` 完成端到端自检；
 8. 在图形界面中展示安装结果和修复入口。
 
@@ -94,7 +94,7 @@ SQLite 保存：
 
 首次升级自动把现有 `profiles.json` 和 `history.json` 迁移到 SQLite。迁移在事务中执行，完成校验后才切换；原 JSON 文件以只读备份形式保留，失败则继续使用旧数据且不删除原文件。
 
-Windows 默认数据库路径为 `%APPDATA%\AI SSH\ai-ssh.sqlite`。SQLite 使用 WAL 模式，`-wal` 与 `-shm` 文件是运行时数据库组成部分，不能作为孤立文件删除。
+为兼容改名前的数据，Windows 默认数据库路径继续使用 `%APPDATA%\AI SSH\ai-ssh.sqlite`。SQLite 使用 WAL 模式，`-wal` 与 `-shm` 文件是运行时数据库组成部分，不能作为孤立文件删除。
 
 ## 七、连接会话与并发规则
 
@@ -200,7 +200,7 @@ Windows 默认数据库路径为 `%APPDATA%\AI SSH\ai-ssh.sqlite`。SQLite 使�
 
 ## 十四、Codex Plugin 设计
 
-仓库内维护 AI SSH Plugin 与本地 Marketplace 清单。
+仓库内维护 OrbitSSH Plugin 与本地 Marketplace 清单。
 
 Plugin 包含：
 

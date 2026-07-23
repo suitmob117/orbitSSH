@@ -9,6 +9,7 @@ import { registerElectronCleanup } from '@core/process-lifecycle';
 const services = createCoreServices();
 const { profileStore, historyStore, sessionManager } = services;
 registerElectronCleanup(app, services.close);
+app.setName('OrbitSSH');
 
 let mainWindow: BrowserWindow | undefined;
 
@@ -24,8 +25,8 @@ function createWindow(): void {
     height: 860,
     minWidth: 1100,
     minHeight: 720,
-    title: 'AI SSH',
-    icon: path.join(app.getAppPath(), 'build', 'icon.png'),
+    title: 'OrbitSSH',
+    icon: path.join(app.getAppPath(), 'build', process.platform === 'win32' ? 'icon.ico' : 'icon.png'),
     autoHideMenuBar: true,
     backgroundColor: '#f8fafc',
     webPreferences: {
