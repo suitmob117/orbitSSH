@@ -1,0 +1,605 @@
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { FitAddon } from '@xterm/addon-fit';
+import { Terminal } from '@xterm/xterm';
+import {
+  Activity,
+  CheckCircle2,
+  ChevronRight,
+  Download,
+  Eye,
+  EyeOff,
+  FileClock,
+  FolderInput,
+  HardDrive,
+  History,
+  Monitor,
+  Moon,
+  Play,
+  PlugZap,
+  Power,
+  RefreshCw,
+  Save,
+  Search,
+  Server,
+  Settings2,
+  ShieldCheck,
+  Sun,
+  TerminalSquare,
+  Upload
+} from 'lucide-react';
+import type {
+  AuthMethod,
+  AuthorizationLevel,
+  CommandRecord,
+  ConnectionProfile,
+  ConnectionProfileInput,
+  ConnectionSession,
+  FileTransferRequest,
+  HostKeyTrustChallenge
+} from '@shared/types';
+import { Button, DangerButton, Input, Label, SecondaryButton, Select } from './ui';
+import { cn } from '../lib/utils';
+
+export type CenterView = 'terminal' | 'config' | 'history';
+export type InspectorView = 'activity' | 'transfer';
+type ThemePreference = 'system' | 'light' | 'dark';
+
+const AUTH_LABELS: Record<AuthMethod, string> = {
+  saved_password: '保存密码',
+  password_prompt: '每次输入密码',
+  ssh_agent: 'SSH Agent',
+  private_key: '私钥'
+};
+
+const ENABLED_AUTH_METHODS: AuthMethod[] = ['saved_password', 'ssh_agent', 'private_key'];
+
+const AUTH_LEVEL_LABELS: Record<AuthorizationLevel, string> = {
+  ask_every_time: '每次询问',
+  auto_readonly: '自动只读',
+  trusted_session: '信任会话'
+};
+
+function healthLabel(health?: ConnectionSession['health']): string {
+  if (health === 'connected') return '已连接';
+  if (health === 'degraded') return '连接异常';
+  if (health === 'disconnected') return '已断开';
+  return '未连接';
+}
+
+function formatTime(value?: string): string {
+  if (!value) return '尚未检查';
+  return new Intl.DateTimeFormat('zh-CN', {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit'
+  }).format(new Date(value));
+}
+
+function ThemeButton({
+  active,
+  label,
+  children,
+  onClick
+}: {
+  active: boolean;
+  label: string;
+  children: React.ReactNode;
+  onClick: () => void;
+}): JSX.Element {
+  return (
+    <button
+      type="button"
+      className={cn('topbar-icon', active && 'is-active')}
+      aria-label={label}
+      title={label}
+      aria-pressed={active}
+      onClick={onClick}
+    >
+      {children}
+    </button>
+  );
+}
+
+export function AppTopbar({
+  profileName,
+  themePreference,
+  onThemeChange
+}: {
+  profileName?: string;
+  themePreference: ThemePreference;
+  onThemeChange: (value: ThemePreference) => void;
+}): JSX.Element {
+  return (
+    <header className="workbench-topbar">
+      <div className="workbench-brand">
+        <div className="workbench-brand-mark"><img src="/icon.png" alt="" /></div>
+        <div><strong>AI SSH</strong><span>COLLABORATIVE TERMINAL</span></div>
+      </div>
+      <div className="workbench-crumb">
+        <span>工作空间</span><i>/</i><span>连接会话</span><i>/</i>
+        <b>{profileName ?? '新建连接'}</b>
+      </div>
+      <div className="workbench-top-actions">
+        <span className="mcp-ready"><i />本地 MCP 已就绪</span>
+        <ThemeButton active={themePreference === 'system'} label="跟随系统" onClick={() => onThemeChange('system')}>
+          <Monitor />
+        </ThemeButton>
+        <ThemeButton active={themePreference === 'light'} label="浅色主题" onClick={() => onThemeChange('light')}>
+          <Sun />
+        </ThemeButton>
+        <ThemeButton active={themePreference === 'dark'} label="深色主题" onClick={() => onThemeChange('dark')}>
+          <Moon />
+        </ThemeButton>
+      </div>
+    </header>
+  );
+}
+
+export function ServerSidebar({
+  profiles,
+  sessions,
+  selectedProfileId,
+  onCreate,
+  onSelect
+}: {
+  profiles: ConnectionProfile[];
+  sessions: ConnectionSession[];
+  selectedProfileId?: string;
+  onCreate: () => void;
+  onSelect: (profile: ConnectionProfile) => void;
+}): JSX.Element {
+  const [query, setQuery] = useState('');
+  const filteredProfiles = useMemo(() => {
+    const keyword = query.trim().toLowerCase();
+    if (!keyword) return profiles;
+    return profiles.filter((profile) =>
+      [profile.name, profile.host, profile.username].some((value) => value.toLowerCase().includes(keyword))
+    );
+  }, [profiles, query]);
+  const connectedCount = profiles.filter((profile) =>
+    sessions.some((session) => session.profileId === profile.id && session.health !== 'disconnected')
+  ).length;
+
+  return (
+    <aside className="server-sidebar workbench-panel">
+      <div className="server-sidebar-head">
+        <div><span>NETWORK ATLAS</span><strong>服务器星图</strong></div>
+        <button type="button" onClick={onCreate} aria-label="新建连接" title="新建连接">+</button>
+      </div>
+      <label className="server-search">
+        <Search />
+        <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索主机、用户或 IP" />
+      </label>
+      <div className="server-summary">
+        <span className="is-active">全部 {profiles.length}</span>
+        <span>在线 {connectedCount}</span>
+      </div>
+      <div className="server-list">
+        <div className="server-group"><span>已保存连接</span><span>{String(filteredProfiles.length).padStart(2, '0')}</span></div>
+        {filteredProfiles.map((profile) => {
+          const session = sessions.find(
+            (item) => item.profileId === profile.id && item.health !== 'disconnected'
+          );
+          return (
+            <button
+              type="button"
+              key={profile.id}
+              className={cn('server-row', selectedProfileId === profile.id && 'is-selected')}
+              onClick={() => onSelect(profile)}
+            >
+              <i className={cn('server-node', session?.health === 'connected' && 'is-online', session?.health === 'degraded' && 'is-warning')} />
+              <span className="server-row-main">
+                <span className="server-row-name"><b>{profile.name}</b><em>{healthLabel(session?.health)}</em></span>
+                <span className="server-row-meta">{profile.username} · {profile.host} · {profile.port}</span>
+              </span>
+            </button>
+          );
+        })}
+        {filteredProfiles.length === 0 ? <div className="server-empty">没有匹配的服务器</div> : null}
+      </div>
+      <div className="server-sidebar-foot">
+        <div><strong>Codex 协作通道</strong><span className="channel-switch" /></div>
+        <p><i />按需运行 · 数据保存在本机</p>
+      </div>
+    </aside>
+  );
+}
+
+function TerminalPanel({
+  session,
+  externalOutput
+}: {
+  session: ConnectionSession;
+  externalOutput: string;
+}): JSX.Element {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const terminalRef = useRef<Terminal>();
+  const terminalIdRef = useRef<string>();
+  const lastExternalOutputRef = useRef('');
+
+  const terminalTheme = () => document.documentElement.classList.contains('dark')
+    ? { background: '#061014', foreground: '#b9d2cf', cursor: '#62eee0', selectionBackground: '#24514f' }
+    : { background: '#f5fbfa', foreground: '#244947', cursor: '#0b9e95', selectionBackground: '#b7e9e3' };
+
+  useEffect(() => {
+    if (!containerRef.current) return;
+    const terminal = new Terminal({
+      cursorBlink: true,
+      convertEol: true,
+      fontFamily: '"Cascadia Code", "Cascadia Mono", Consolas, monospace',
+      fontSize: 12,
+      lineHeight: 1.55,
+      theme: terminalTheme()
+    });
+    const fitAddon = new FitAddon();
+    terminal.loadAddon(fitAddon);
+    terminal.open(containerRef.current);
+    fitAddon.fit();
+    terminal.writeln('\x1b[38;2;98;238;224m正在打开安全终端…\x1b[0m');
+    terminalRef.current = terminal;
+    let disposed = false;
+    const unsubscribe = window.aiSsh.onTerminalData((chunk) => {
+      if (chunk.terminalId === terminalIdRef.current) terminal.write(chunk.data);
+    });
+    void window.aiSsh.openTerminal(session.id).then((terminalId) => {
+      if (disposed) {
+        void window.aiSsh.closeTerminal(terminalId);
+        return;
+      }
+      terminalIdRef.current = terminalId;
+      terminal.onData((data) => void window.aiSsh.writeTerminal(terminalId, data));
+    }).catch((error: unknown) => {
+      terminal.writeln(`\r\n终端打开失败：${error instanceof Error ? error.message : String(error)}`);
+    });
+    const resize = () => fitAddon.fit();
+    window.addEventListener('resize', resize);
+    return () => {
+      disposed = true;
+      window.removeEventListener('resize', resize);
+      unsubscribe();
+      if (terminalIdRef.current) void window.aiSsh.closeTerminal(terminalIdRef.current);
+      terminal.dispose();
+      terminalRef.current = undefined;
+      terminalIdRef.current = undefined;
+    };
+  }, [session.id]);
+
+  useEffect(() => {
+    const observer = new MutationObserver(() => {
+      if (terminalRef.current) terminalRef.current.options.theme = terminalTheme();
+    });
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });
+    return () => observer.disconnect();
+  }, []);
+
+  useEffect(() => {
+    if (!externalOutput || externalOutput === lastExternalOutputRef.current) return;
+    lastExternalOutputRef.current = externalOutput;
+    terminalRef.current?.writeln(`\r\n\x1b[38;2;138;242;194m${externalOutput.replace(/\n/g, '\r\n')}\x1b[0m`);
+  }, [externalOutput]);
+
+  return <div ref={containerRef} className="terminal-canvas" />;
+}
+
+function EmptyTerminal(): JSX.Element {
+  return (
+    <div className="terminal-empty">
+      <div className="terminal-empty-orb"><TerminalSquare /></div>
+      <strong>终端正在等待连接</strong>
+      <p>选择左侧服务器，确认授权等级后建立 SSH 会话。</p>
+    </div>
+  );
+}
+
+function WorkspaceTabs({ view, onChange }: { view: CenterView; onChange: (value: CenterView) => void }): JSX.Element {
+  const tabs: Array<{ id: CenterView; label: string; icon: React.ReactNode }> = [
+    { id: 'terminal', label: '主会话', icon: <TerminalSquare /> },
+    { id: 'config', label: '服务器配置', icon: <Settings2 /> },
+    { id: 'history', label: '执行记录', icon: <History /> }
+  ];
+  return (
+    <div className="workspace-tabs">
+      <div>{tabs.map((tab) => (
+        <button type="button" key={tab.id} className={cn(view === tab.id && 'is-active')} onClick={() => onChange(tab.id)}>
+          {tab.icon}{tab.label}
+        </button>
+      ))}</div>
+      <span>会话工作台</span>
+    </div>
+  );
+}
+
+function SessionHeader({
+  profile,
+  session,
+  authorizationLevel,
+  busy,
+  onAuthorizationLevelChange,
+  onConnect,
+  onDisconnect,
+  onOpenTransfer
+}: {
+  profile?: ConnectionProfile;
+  session?: ConnectionSession;
+  authorizationLevel: AuthorizationLevel;
+  busy: boolean;
+  onAuthorizationLevelChange: (value: AuthorizationLevel) => void;
+  onConnect: () => void;
+  onDisconnect: () => void;
+  onOpenTransfer: () => void;
+}): JSX.Element {
+  return (
+    <section className="session-header workbench-panel">
+      <div className="session-identity">
+        <div className="server-orb"><Server /></div>
+        <div>
+          <h1>{profile?.name ?? '新建连接'}</h1>
+          <p>{profile ? <><b>{profile.username}</b>@{profile.host} · 端口 {profile.port}</> : '填写服务器信息后保存连接'}</p>
+        </div>
+      </div>
+      <div className="session-controls">
+        <span className={cn('trust-state', session && 'is-trusted')}><i />{session ? '会话已建立' : '等待连接'}</span>
+        <Select value={authorizationLevel} onChange={(event) => onAuthorizationLevelChange(event.target.value as AuthorizationLevel)}>
+          {Object.entries(AUTH_LEVEL_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+        </Select>
+        <SecondaryButton onClick={onOpenTransfer} disabled={!profile}><FolderInput />文件舱</SecondaryButton>
+        {session ? (
+          <DangerButton onClick={onDisconnect}><Power />关闭</DangerButton>
+        ) : (
+          <Button onClick={onConnect} disabled={!profile || busy}><PlugZap />连接</Button>
+        )}
+      </div>
+    </section>
+  );
+}
+
+function CommandBar({
+  command,
+  disabled,
+  busy,
+  onCommandChange,
+  onRun
+}: {
+  command: string;
+  disabled: boolean;
+  busy: boolean;
+  onCommandChange: (value: string) => void;
+  onRun: () => void;
+}): JSX.Element {
+  return (
+    <div className="command-bar">
+      <span>›</span>
+      <input
+        value={command}
+        onChange={(event) => onCommandChange(event.target.value)}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter' && !event.shiftKey && !disabled && !busy) {
+            event.preventDefault();
+            onRun();
+          }
+        }}
+        disabled={disabled}
+        placeholder="输入要在当前会话执行的命令"
+      />
+      <button type="button" onClick={onRun} disabled={disabled || busy} aria-label="执行命令"><Play /></button>
+    </div>
+  );
+}
+
+function ProfileEditor({
+  form,
+  busy,
+  onChange,
+  onSave
+}: {
+  form: ConnectionProfileInput;
+  busy: boolean;
+  onChange: (form: ConnectionProfileInput) => void;
+  onSave: () => void;
+}): JSX.Element {
+  const [showPassword, setShowPassword] = useState(false);
+  const [showPassphrase, setShowPassphrase] = useState(false);
+  return (
+    <div className="profile-editor">
+      <div className="editor-heading"><div><strong>服务器配置</strong><span>凭据由系统安全存储，敏感字段不会回显。</span></div><Button onClick={onSave} disabled={busy}><Save />保存</Button></div>
+      <div className="editor-grid">
+        <Field label="配置名称"><Input value={form.name} onChange={(e) => onChange({ ...form, name: e.target.value })} /></Field>
+        <Field label="用户名"><Input value={form.username} onChange={(e) => onChange({ ...form, username: e.target.value })} /></Field>
+        <Field label="主机地址"><Input value={form.host} onChange={(e) => onChange({ ...form, host: e.target.value })} /></Field>
+        <Field label="端口"><Input type="number" value={form.port} onChange={(e) => onChange({ ...form, port: Number(e.target.value) })} /></Field>
+        <Field label="认证方式"><Select value={form.authMethod} onChange={(e) => onChange({ ...form, authMethod: e.target.value as AuthMethod })}>{ENABLED_AUTH_METHODS.map((method) => <option key={method} value={method}>{AUTH_LABELS[method]}</option>)}</Select></Field>
+        <Field label="密码"><SecretInput shown={showPassword} placeholder="留空表示不修改" value={form.password ?? ''} onToggle={() => setShowPassword((value) => !value)} onChange={(value) => onChange({ ...form, password: value })} /></Field>
+        <Field label="私钥路径"><Input disabled={form.authMethod !== 'private_key'} value={form.privateKeyPath ?? ''} onChange={(e) => onChange({ ...form, privateKeyPath: e.target.value })} /></Field>
+        <Field label="私钥口令"><SecretInput shown={showPassphrase} disabled={form.authMethod !== 'private_key'} value={form.privateKeyPassphrase ?? ''} onToggle={() => setShowPassphrase((value) => !value)} onChange={(value) => onChange({ ...form, privateKeyPassphrase: value })} /></Field>
+        <Field label="连接超时 MS"><Input type="number" value={form.connectTimeoutMs} onChange={(e) => onChange({ ...form, connectTimeoutMs: Number(e.target.value) })} /></Field>
+        <Field label="KEEPALIVE MS"><Input type="number" value={form.keepaliveIntervalMs} onChange={(e) => onChange({ ...form, keepaliveIntervalMs: Number(e.target.value) })} /></Field>
+        <Field label="本地文件允许目录"><Input placeholder="例如 C:\\Users\\你的用户名\\Downloads" value={form.localTransferRoot ?? ''} onChange={(e) => onChange({ ...form, localTransferRoot: e.target.value })} /></Field>
+        <Field label="远程文件允许目录（每行一个）"><textarea placeholder={'例如\n/srv/app\n/var/log/app'} value={(form.remoteTransferRoots ?? []).join('\n')} onChange={(e) => onChange({ ...form, remoteTransferRoots: e.target.value.split(/\r?\n/).map((root) => root.trim()).filter(Boolean) })} /></Field>
+      </div>
+    </div>
+  );
+}
+
+function SecretInput({ shown, disabled, value, placeholder, onToggle, onChange }: { shown: boolean; disabled?: boolean; value: string; placeholder?: string; onToggle: () => void; onChange: (value: string) => void }): JSX.Element {
+  const Icon = shown ? EyeOff : Eye;
+  return <div className="secret-input"><Input type={shown ? 'text' : 'password'} disabled={disabled} value={value} placeholder={placeholder} onChange={(event) => onChange(event.target.value)} /><button type="button" disabled={disabled} onClick={onToggle} aria-label={shown ? '隐藏密码' : '显示密码'}><Icon /></button></div>;
+}
+
+function HistoryView({ history }: { history: CommandRecord[] }): JSX.Element {
+  return (
+    <div className="history-view">
+      <div className="editor-heading"><div><strong>执行记录</strong><span>仅显示当前 SSH 会话的真实命令结果。</span></div><FileClock /></div>
+      <div className="history-list">
+        {history.length === 0 ? <div className="content-empty">当前会话还没有命令记录</div> : history.slice().reverse().map((record) => (
+          <article key={record.id}>
+            <div><code>{record.command}</code><span className={cn(record.exitCode === 0 && 'is-success')}>退出码 {record.exitCode ?? '未知'}</span></div>
+            <p>{record.summary}</p><time>{formatTime(record.finishedAt ?? record.startedAt)}</time>
+          </article>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+export function CenterWorkbench({
+  profile,
+  session,
+  form,
+  authorizationLevel,
+  history,
+  view,
+  command,
+  commandOutput,
+  busy,
+  message,
+  onViewChange,
+  onFormChange,
+  onAuthorizationLevelChange,
+  onCommandChange,
+  onConnect,
+  onDisconnect,
+  onHealthCheck,
+  onRunCommand,
+  onSave,
+  onOpenTransfer
+}: {
+  profile?: ConnectionProfile;
+  session?: ConnectionSession;
+  form: ConnectionProfileInput;
+  authorizationLevel: AuthorizationLevel;
+  history: CommandRecord[];
+  view: CenterView;
+  command: string;
+  commandOutput: string;
+  busy: boolean;
+  message?: string;
+  onViewChange: (value: CenterView) => void;
+  onFormChange: (form: ConnectionProfileInput) => void;
+  onAuthorizationLevelChange: (value: AuthorizationLevel) => void;
+  onCommandChange: (value: string) => void;
+  onConnect: () => void;
+  onDisconnect: () => void;
+  onHealthCheck: () => void;
+  onRunCommand: () => void;
+  onSave: () => void;
+  onOpenTransfer: () => void;
+}): JSX.Element {
+  return (
+    <main className="center-workbench">
+      <SessionHeader profile={profile} session={session} authorizationLevel={authorizationLevel} busy={busy} onAuthorizationLevelChange={onAuthorizationLevelChange} onConnect={onConnect} onDisconnect={onDisconnect} onOpenTransfer={onOpenTransfer} />
+      {message ? <div className="workbench-toast">{message}</div> : null}
+      <section className="workspace-surface workbench-panel">
+        <WorkspaceTabs view={view} onChange={onViewChange} />
+        {view === 'terminal' ? (
+          <div className="terminal-workspace">
+            {session ? <TerminalPanel session={session} externalOutput={commandOutput} /> : <EmptyTerminal />}
+            <CommandBar command={command} busy={busy} disabled={!session} onCommandChange={onCommandChange} onRun={onRunCommand} />
+          </div>
+        ) : null}
+        {view === 'config' ? <ProfileEditor form={form} busy={busy} onChange={onFormChange} onSave={onSave} /> : null}
+        {view === 'history' ? <HistoryView history={history} /> : null}
+      </section>
+      <section className="session-strip">
+        <div className="workbench-panel"><span>会话状态</span><strong className={cn(session && 'is-positive')}>{healthLabel(session?.health)}</strong><p>{session ? `建立于 ${formatTime(session.openedAt)}` : '尚未建立 SSH 会话'}</p></div>
+        <div className="workbench-panel"><span>授权模式</span><strong>{AUTH_LEVEL_LABELS[authorizationLevel]}</strong><p>执行策略对当前会话生效</p></div>
+        <div className="workbench-panel"><span>文件边界</span><strong>{profile?.localTransferRoot || profile?.remoteTransferRoots?.length ? '已配置' : '未配置'}</strong><p>{profile?.remoteTransferRoots?.[0] ?? '传输前必须设置允许目录'}</p></div>
+        <button type="button" className="health-action workbench-panel" disabled={!session || busy} onClick={onHealthCheck}><RefreshCw />检查连接</button>
+      </section>
+    </main>
+  );
+}
+
+function Field({ label, children }: { label: string; children: React.ReactNode }): JSX.Element {
+  return <label className="form-field"><Label>{label}</Label>{children}</label>;
+}
+
+function ActivityTimeline({ history, session }: { history: CommandRecord[]; session?: ConnectionSession }): JSX.Element {
+  const records = history.slice(-4).reverse();
+  return (
+    <div className="activity-timeline">
+      {session ? <div className="activity-event is-done"><i /><time>{formatTime(session.openedAt)}</time><strong>SSH 会话已建立</strong><p>后续终端、命令和传输操作复用该会话。</p></div> : null}
+      {records.map((record, index) => <div className={cn('activity-event', index === 0 && 'is-live')} key={record.id}><i /><time>{formatTime(record.finishedAt ?? record.startedAt)}</time><strong>执行命令</strong><p>{record.summary}</p><code>{record.command}</code></div>)}
+      {!session && records.length === 0 ? <div className="activity-event is-live"><i /><time>现在</time><strong>等待建立连接</strong><p>选择服务器并连接后，这里会显示真实操作轨迹。</p></div> : null}
+    </div>
+  );
+}
+
+function HostKeyApproval({ challenge, busy, onConfirm }: { challenge: HostKeyTrustChallenge; busy: boolean; onConfirm: () => void }): JSX.Element {
+  return (
+    <div className="host-key-approval">
+      <div><strong>需要核对主机指纹</strong><span>{challenge.risk === 'changed' ? '高风险' : '首次连接'}</span></div>
+      <p>{challenge.risk === 'changed' ? '服务器指纹发生变化，请通过可信渠道核对后再替换。' : '请通过可信渠道核对服务器提供的 SHA-256 指纹。'}</p>
+      <code>{challenge.newFingerprint}</code>
+      <DangerButton disabled={busy} onClick={onConfirm}>{challenge.risk === 'changed' ? '确认并替换指纹' : '信任此主机'}</DangerButton>
+    </div>
+  );
+}
+
+function SecuritySummary({ profile, challenge, authorizationLevel }: { profile?: ConnectionProfile; challenge?: HostKeyTrustChallenge; authorizationLevel: AuthorizationLevel }): JSX.Element {
+  return (
+    <div className="security-summary">
+      <div className="security-heading"><span>安全态势</span><ShieldCheck /></div>
+      <div className="security-grid">
+        <div><b>执行授权</b><span>{AUTH_LEVEL_LABELS[authorizationLevel]}</span></div>
+        <div><b>主机指纹</b><span className={challenge ? 'is-warning' : 'is-positive'}>{challenge ? '等待核对' : '无待确认告警'}</span></div>
+        <div><b>本地边界</b><span>{profile?.localTransferRoot || '尚未配置'}</span></div>
+        <div><b>远程边界</b><span>{profile?.remoteTransferRoots?.[0] ?? '尚未配置'}</span></div>
+      </div>
+    </div>
+  );
+}
+
+function TransferPanel({ transfer, session, busy, onChange, onTransfer }: { transfer: FileTransferRequest; session?: ConnectionSession; busy: boolean; onChange: (value: FileTransferRequest) => void; onTransfer: () => void }): JSX.Element {
+  return (
+    <div className="transfer-panel">
+      <div className="transfer-route"><div><HardDrive /><span>本地</span></div><ChevronRight /><div><Server /><span>远程</span></div></div>
+      <Field label="传输方向"><Select value={transfer.direction} onChange={(event) => onChange({ ...transfer, direction: event.target.value as FileTransferRequest['direction'] })}><option value="upload">上传到服务器</option><option value="download">下载到本地</option></Select></Field>
+      <Field label="本地路径"><Input value={transfer.localPath} onChange={(event) => onChange({ ...transfer, localPath: event.target.value })} /></Field>
+      <Field label="远程路径"><Input value={transfer.remotePath} onChange={(event) => onChange({ ...transfer, remotePath: event.target.value })} /></Field>
+      <Button disabled={!session || busy} onClick={onTransfer}>{transfer.direction === 'upload' ? <Upload /> : <Download />}开始传输</Button>
+      {!session ? <p className="transfer-hint">建立 SSH 会话后才能传输文件。</p> : null}
+    </div>
+  );
+}
+
+export function ActivityRail({
+  profile,
+  session,
+  history,
+  challenge,
+  authorizationLevel,
+  transfer,
+  view,
+  busy,
+  onViewChange,
+  onTransferChange,
+  onTransfer,
+  onConfirmHostKey
+}: {
+  profile?: ConnectionProfile;
+  session?: ConnectionSession;
+  history: CommandRecord[];
+  challenge?: HostKeyTrustChallenge;
+  authorizationLevel: AuthorizationLevel;
+  transfer: FileTransferRequest;
+  view: InspectorView;
+  busy: boolean;
+  onViewChange: (value: InspectorView) => void;
+  onTransferChange: (value: FileTransferRequest) => void;
+  onTransfer: () => void;
+  onConfirmHostKey: (challenge: HostKeyTrustChallenge) => void;
+}): JSX.Element {
+  return (
+    <aside className="activity-rail workbench-panel">
+      <div className="activity-rail-head">
+        <div className="ai-core"><i /></div>
+        <div><strong>{view === 'activity' ? '协作轨迹' : '文件舱'}</strong><span>{session ? `${profile?.name} · 会话运行中` : '等待你的下一步操作'}</span></div>
+        <div className="rail-tabs"><button type="button" className={cn(view === 'activity' && 'is-active')} onClick={() => onViewChange('activity')} title="协作轨迹"><Activity /></button><button type="button" className={cn(view === 'transfer' && 'is-active')} onClick={() => onViewChange('transfer')} title="文件传输"><Upload /></button></div>
+      </div>
+      <div className="activity-rail-body">
+        {view === 'activity' ? <><ActivityTimeline history={history} session={session} />{challenge ? <HostKeyApproval challenge={challenge} busy={busy} onConfirm={() => onConfirmHostKey(challenge)} /> : null}</> : <TransferPanel transfer={transfer} session={session} busy={busy} onChange={onTransferChange} onTransfer={onTransfer} />}
+      </div>
+      <SecuritySummary profile={profile} challenge={challenge} authorizationLevel={authorizationLevel} />
+    </aside>
+  );
+}
