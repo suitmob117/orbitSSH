@@ -32,8 +32,33 @@ interface ManagedSession {
   session: ConnectionSession;
   profile: ConnectionProfile;
   client: Client;
-  terminals: Map<string, ClientChannel>;
+  terminal?: ManagedTerminal;
+  terminalOpening?: Promise<ManagedTerminal>;
+  commandTail: Promise<void>;
 }
+
+interface PendingTerminalCommand {
+  command: string;
+  wrapper: string;
+  markerPrefix: string;
+  buffer: string;
+  stdout: string;
+  echoHandled: boolean;
+  settled: boolean;
+  timeout: NodeJS.Timeout;
+  resolve(result: { stdout: string; stderr: string; exitCode?: number }): void;
+  reject(error: Error): void;
+}
+
+interface ManagedTerminal {
+  id: string;
+  sessionId: string;
+  stream: ClientChannel;
+  transcript: string;
+  pending?: PendingTerminalCommand;
+}
+
+const TERMINAL_TRANSCRIPT_LIMIT = 64 * 1024;
 
 function summarizeCommand(command: string, stdout: string, stderr: string, exitCode?: number): string {
   const risk = assessCommand(command);
@@ -181,7 +206,7 @@ export class SshSessionManager extends EventEmitter {
       session,
       profile,
       client,
-      terminals: new Map()
+      commandTail: Promise.resolve()
     };
 
     client.on('error', (error) => {
@@ -204,9 +229,7 @@ export class SshSessionManager extends EventEmitter {
 
   async closeSession(sessionId: string): Promise<void> {
     const managed = this.getManaged(sessionId);
-    for (const terminal of managed.terminals.values()) {
-      terminal.end();
-    }
+    managed.terminal?.stream.end();
     managed.client.end();
     managed.session.health = 'disconnected';
     this.sessions.delete(sessionId);
@@ -233,7 +256,9 @@ export class SshSessionManager extends EventEmitter {
     }
 
     enforceCommandAuthorization(managed.session.authorizationLevel, command);
-    return this.executeCommand(sessionId, command);
+    const startedAt = new Date().toISOString();
+    const result = await this.execRaw(managed.client, command);
+    return this.recordCommand(sessionId, command, startedAt, result);
   }
 
   async executeCommand(sessionId: string, command: string): Promise<CommandResult> {
@@ -241,9 +266,19 @@ export class SshSessionManager extends EventEmitter {
     if (managed.session.health === 'disconnected') {
       throw new Error('连接会话已断开，请重新连接');
     }
-    const redactedCommand = redactCommand(command);
     const startedAt = new Date().toISOString();
-    const result = await this.execRaw(managed.client, command);
+    await this.openTerminal(sessionId);
+    const result = await this.enqueueTerminalCommand(managed, command);
+    return this.recordCommand(sessionId, command, startedAt, result);
+  }
+
+  private async recordCommand(
+    sessionId: string,
+    command: string,
+    startedAt: string,
+    result: { stdout: string; stderr: string; exitCode?: number; signal?: string }
+  ): Promise<CommandResult> {
+    const redactedCommand = redactCommand(command);
     const finishedAt = new Date().toISOString();
     const stdoutTail = tail(result.stdout);
     const stderrTail = tail(result.stderr);
@@ -366,60 +401,175 @@ export class SshSessionManager extends EventEmitter {
 
   async openTerminal(sessionId: string): Promise<string> {
     const managed = this.getManaged(sessionId);
-    const terminalId = randomUUID();
+    if (managed.terminal) return managed.terminal.id;
+    if (managed.terminalOpening) return (await managed.terminalOpening).id;
+    managed.terminalOpening = this.createTerminal(managed);
+    try {
+      return (await managed.terminalOpening).id;
+    } finally {
+      managed.terminalOpening = undefined;
+    }
+  }
 
-    await new Promise<void>((resolve, reject) => {
+  getTerminalReplay(terminalId: string): string {
+    return this.findTerminal(terminalId).transcript;
+  }
+
+  getTerminalSessionId(terminalId: string): string {
+    return this.findTerminal(terminalId).sessionId;
+  }
+
+  private createTerminal(managed: ManagedSession): Promise<ManagedTerminal> {
+    const terminalId = randomUUID();
+    return new Promise<ManagedTerminal>((resolve, reject) => {
       managed.client.shell({ term: 'xterm-256color', cols: 120, rows: 32 }, (error, stream) => {
         if (error) {
           reject(sanitizedError(error));
           return;
         }
 
-        managed.terminals.set(terminalId, stream);
+        const terminal: ManagedTerminal = {
+          id: terminalId,
+          sessionId: managed.session.id,
+          stream,
+          transcript: ''
+        };
+        managed.terminal = terminal;
         stream.on('data', (data: Buffer) => {
-          const chunk: TerminalChunk = {
-            sessionId,
-            terminalId,
-            data: data.toString('utf8')
-          };
-          this.emit('terminal-data', chunk);
+          this.consumeTerminalData(terminal, data.toString('utf8'));
         });
         stream.stderr.on('data', (data: Buffer) => {
-          const chunk: TerminalChunk = {
-            sessionId,
-            terminalId,
-            data: data.toString('utf8')
-          };
-          this.emit('terminal-data', chunk);
+          this.emitTerminalData(terminal, data.toString('utf8'));
         });
         stream.on('close', () => {
-          managed.terminals.delete(terminalId);
+          if (terminal.pending) {
+            clearTimeout(terminal.pending.timeout);
+            terminal.pending.reject(new Error('共享终端已关闭，命令未完成'));
+            terminal.pending = undefined;
+          }
+          if (managed.terminal?.id === terminalId) managed.terminal = undefined;
         });
-        resolve();
+        resolve(terminal);
       });
     });
-
-    return terminalId;
   }
 
   runTerminalCommand(sessionId: string, terminalId: string, command: string): void {
     const managed = this.getManaged(sessionId);
-    const terminal = managed.terminals.get(terminalId);
-    if (!terminal) {
+    const terminal = managed.terminal;
+    if (!terminal || terminal.id !== terminalId) {
       throw new Error(`当前会话中不存在终端：${terminalId}`);
     }
     enforceCommandAuthorization(managed.session.authorizationLevel, command);
-    terminal.write(`${command}\r`);
+    terminal.stream.write(`${command}\r`);
   }
 
   writeTerminal(terminalId: string, data: string): void {
     const terminal = this.findTerminal(terminalId);
-    terminal.write(data);
+    terminal.stream.write(data);
   }
 
   closeTerminal(terminalId: string): void {
-    const terminal = this.findTerminal(terminalId);
-    terminal.end();
+    // Renderer 离开只会解除观察；共享 PTY 由 Runtime 会话持有，关闭会话时才销毁。
+    this.findTerminal(terminalId);
+  }
+
+  private enqueueTerminalCommand(
+    managed: ManagedSession,
+    command: string
+  ): Promise<{ stdout: string; stderr: string; exitCode?: number }> {
+    const previous = managed.commandTail;
+    let release!: () => void;
+    managed.commandTail = new Promise<void>((resolve) => { release = resolve; });
+    return previous.then(() => this.executeTerminalCommand(managed, command)).finally(release);
+  }
+
+  private executeTerminalCommand(
+    managed: ManagedSession,
+    command: string
+  ): Promise<{ stdout: string; stderr: string; exitCode?: number }> {
+    const terminal = managed.terminal;
+    if (!terminal) throw new Error('共享终端尚未建立');
+    if (terminal.pending) throw new Error('共享终端仍有前台命令运行，不能启动下一条命令');
+    const token = randomUUID().replaceAll('-', '');
+    const markerPrefix = `\u001eORBITSSH:${token}:`;
+    const wrapper = `${command}; __orbitssh_code=$?; printf '\\036ORBITSSH:${token}:%s\\037' "$__orbitssh_code"\r`;
+    return new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        if (terminal.pending?.markerPrefix !== markerPrefix) return;
+        terminal.pending.settled = true;
+        reject(new Error('共享终端命令执行超时'));
+      }, 120_000);
+      terminal.pending = {
+        command,
+        wrapper,
+        markerPrefix,
+        buffer: '',
+        stdout: '',
+        echoHandled: false,
+        settled: false,
+        timeout,
+        resolve,
+        reject
+      };
+      terminal.stream.write(wrapper);
+    });
+  }
+
+  private consumeTerminalData(terminal: ManagedTerminal, data: string): void {
+    const pending = terminal.pending;
+    if (!pending) {
+      this.emitTerminalData(terminal, data);
+      return;
+    }
+    pending.buffer += data;
+    if (!pending.echoHandled) {
+      const wrapperStart = pending.buffer.indexOf(pending.wrapper);
+      if (wrapperStart >= 0) {
+        const prefix = pending.buffer.slice(0, wrapperStart);
+        if (prefix) this.emitTerminalData(terminal, prefix);
+        this.emitTerminalData(terminal, `${pending.command}\r`);
+        pending.buffer = pending.buffer.slice(wrapperStart + pending.wrapper.length);
+        pending.echoHandled = true;
+      } else if (pending.buffer.includes(pending.markerPrefix) || pending.buffer.length > pending.wrapper.length + 1024) {
+        pending.echoHandled = true;
+      } else {
+        return;
+      }
+    }
+    const markerStart = pending.buffer.indexOf(pending.markerPrefix);
+    if (markerStart < 0) {
+      const safeLength = Math.max(0, pending.buffer.length - pending.markerPrefix.length);
+      if (safeLength > 0) {
+        const visible = pending.buffer.slice(0, safeLength);
+        pending.stdout = `${pending.stdout}${visible}`.slice(-TERMINAL_TRANSCRIPT_LIMIT);
+        pending.buffer = pending.buffer.slice(safeLength);
+        this.emitTerminalData(terminal, visible);
+      }
+      return;
+    }
+    const markerEnd = pending.buffer.indexOf('\u001f', markerStart + pending.markerPrefix.length);
+    if (markerEnd < 0) return;
+
+    const beforeMarker = pending.buffer.slice(0, markerStart);
+    const exitCodeText = pending.buffer.slice(markerStart + pending.markerPrefix.length, markerEnd);
+    const afterMarker = pending.buffer.slice(markerEnd + 1);
+    const stdout = `${pending.stdout}${beforeMarker}`.replace(/^\r?\n/, '');
+    clearTimeout(pending.timeout);
+    terminal.pending = undefined;
+    if (beforeMarker) this.emitTerminalData(terminal, beforeMarker);
+    if (afterMarker) this.emitTerminalData(terminal, afterMarker);
+    const exitCode = Number.parseInt(exitCodeText, 10);
+    if (!pending.settled) {
+      pending.settled = true;
+      pending.resolve({ stdout, stderr: '', exitCode: Number.isNaN(exitCode) ? undefined : exitCode });
+    }
+  }
+
+  private emitTerminalData(terminal: ManagedTerminal, data: string): void {
+    terminal.transcript = `${terminal.transcript}${data}`.slice(-TERMINAL_TRANSCRIPT_LIMIT);
+    const chunk: TerminalChunk = { sessionId: terminal.sessionId, terminalId: terminal.id, data };
+    this.emit('terminal-data', chunk);
   }
 
   private async connectClient(client: Client, profile: ConnectionProfile): Promise<void> {
@@ -582,12 +732,10 @@ export class SshSessionManager extends EventEmitter {
     );
   }
 
-  private findTerminal(terminalId: string): ClientChannel {
+  private findTerminal(terminalId: string): ManagedTerminal {
     for (const managed of this.sessions.values()) {
-      const terminal = managed.terminals.get(terminalId);
-      if (terminal) {
-        return terminal;
-      }
+      const terminal = managed.terminal;
+      if (terminal?.id === terminalId) return terminal;
     }
     throw new Error(`终端不存在：${terminalId}`);
   }

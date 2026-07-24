@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type {
   AuthorizationLevel,
+  CodrivingAction,
   CommandRecord,
   ConnectionProfile,
   ConnectionProfileInput,
@@ -62,11 +63,22 @@ function toProfileForm(profile: ConnectionProfile): ConnectionProfileInput {
   };
 }
 
+function mergeCodrivingActions(current: CodrivingAction[], incoming: CodrivingAction[]): CodrivingAction[] {
+  const actions = new Map(current.map((action) => [action.id, action]));
+  for (const action of incoming) {
+    const existing = actions.get(action.id);
+    if (!existing || action.sequence >= existing.sequence) actions.set(action.id, action);
+  }
+  return [...actions.values()].sort((left, right) => left.sequence - right.sequence);
+}
+
 export function App(): JSX.Element {
   const [profiles, setProfiles] = useState<ConnectionProfile[]>([]);
   const [sessions, setSessions] = useState<ConnectionSession[]>([]);
   const [history, setHistory] = useState<CommandRecord[]>([]);
   const [hostKeyChallenges, setHostKeyChallenges] = useState<HostKeyTrustChallenge[]>([]);
+  const [codrivingActions, setCodrivingActions] = useState<CodrivingAction[]>([]);
+  const [codexPaused, setCodexPaused] = useState(false);
   const [selectedProfileId, setSelectedProfileId] = useState<string>();
   const [editingId, setEditingId] = useState<string>();
   const [form, setForm] = useState<ConnectionProfileInput>(DEFAULT_FORM);
@@ -76,6 +88,7 @@ export function App(): JSX.Element {
   const [themePreference, setThemePreference] = useState<ThemePreference>(getInitialThemePreference);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string>();
+  const actionCacheRef = useRef(new Map<string, CodrivingAction[]>());
 
   const selectedProfile = profiles.find((profile) => profile.id === selectedProfileId);
   const activeSession = useMemo(() => {
@@ -112,6 +125,58 @@ export function App(): JSX.Element {
   useEffect(() => {
     void refresh();
   }, []);
+
+  useEffect(() => {
+    if (!activeSession) {
+      setCodrivingActions([]);
+      setCodexPaused(false);
+      return;
+    }
+    setAuthorizationLevel(activeSession.authorizationLevel);
+    const sessionId = activeSession.id;
+    const cached = actionCacheRef.current.get(sessionId) ?? [];
+    setCodrivingActions(cached);
+    const afterSequence = cached.at(-1)?.sequence ?? 0;
+    let cancelled = false;
+    void Promise.all([
+      window.aiSsh.listCodrivingActions(sessionId, afterSequence),
+      window.aiSsh.isCodexPaused(sessionId)
+    ]).then(([actions, paused]) => {
+      if (cancelled) return;
+      const current = actionCacheRef.current.get(sessionId) ?? cached;
+      const merged = mergeCodrivingActions(current, actions);
+      actionCacheRef.current.set(sessionId, merged);
+      setCodrivingActions(merged);
+      setCodexPaused(paused);
+    });
+    return () => { cancelled = true; };
+  }, [activeSession?.id]);
+
+  useEffect(() => {
+    const removeActionListener = window.aiSsh.onCodrivingAction((action) => {
+      const cached = actionCacheRef.current.get(action.sessionId) ?? [];
+      const merged = mergeCodrivingActions(cached, [action]);
+      actionCacheRef.current.set(action.sessionId, merged);
+      if (action.sessionId === activeSession?.id) {
+        setCodrivingActions(merged);
+        if (action.kind === 'control') {
+          void window.aiSsh.isCodexPaused(action.sessionId).then(setCodexPaused);
+        }
+      }
+      void refresh();
+    });
+    const removeSessionListener = window.aiSsh.onSessionUpdated((session) => {
+      setSessions((items) => {
+        const exists = items.some((item) => item.id === session.id);
+        return exists ? items.map((item) => item.id === session.id ? session : item) : [...items, session];
+      });
+      if (session.id === activeSession?.id) setAuthorizationLevel(session.authorizationLevel);
+    });
+    return () => {
+      removeActionListener();
+      removeSessionListener();
+    };
+  }, [activeSession?.id]);
 
   useEffect(() => {
     const media = window.matchMedia('(prefers-color-scheme: dark)');
@@ -250,6 +315,67 @@ export function App(): JSX.Element {
     }
   }
 
+  async function changeAuthorizationLevel(level: AuthorizationLevel): Promise<void> {
+    setAuthorizationLevel(level);
+    if (!activeSession) return;
+    setBusy(true);
+    try {
+      const session = await window.aiSsh.setSessionAuthorization({
+        sessionId: activeSession.id,
+        authorizationLevel: level,
+        trustedUntil: level === 'trusted_session'
+          ? new Date(Date.now() + 60 * 60_000).toISOString()
+          : undefined
+      });
+      setSessions((items) => items.map((item) => item.id === session.id ? session : item));
+      setMessage(level === 'trusted_session' ? '已信任本次 Codex 会话 1 小时' : 'Codex 授权模式已更新');
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function decideCodrivingAction(action: CodrivingAction, approve: boolean): Promise<void> {
+    setBusy(true);
+    try {
+      const approval = { actionId: action.id, digest: action.digest };
+      if (approve) await window.aiSsh.approveCodrivingAction(approval);
+      else await window.aiSsh.rejectCodrivingAction(approval);
+      if (activeSession) await refreshCodrivingActions(activeSession.id);
+      await refresh();
+      setMessage(approve ? '操作已批准并执行' : '操作已拒绝');
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function toggleCodexPause(): Promise<void> {
+    if (!activeSession) return;
+    setBusy(true);
+    try {
+      if (codexPaused) await window.aiSsh.resumeCodex(activeSession.id);
+      else await window.aiSsh.pauseCodex(activeSession.id);
+      setCodexPaused(!codexPaused);
+      await refreshCodrivingActions(activeSession.id);
+      setMessage(codexPaused ? 'Codex 已恢复共驾' : '你已接管终端，Codex 后续操作已暂停');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function refreshCodrivingActions(sessionId: string): Promise<void> {
+    const cached = actionCacheRef.current.get(sessionId) ?? [];
+    const afterSequence = cached.at(-1)?.sequence ?? 0;
+    const incoming = await window.aiSsh.listCodrivingActions(sessionId, afterSequence);
+    const current = actionCacheRef.current.get(sessionId) ?? cached;
+    const merged = mergeCodrivingActions(current, incoming);
+    actionCacheRef.current.set(sessionId, merged);
+    setCodrivingActions(merged);
+  }
+
   async function uploadFiles(files: LocalFileSelection[], remoteDirectory: string): Promise<void> {
     if (!activeSession || files.length === 0) return;
     setBusy(true);
@@ -323,14 +449,16 @@ export function App(): JSX.Element {
           session={activeSession}
           sessions={sessions.filter((session) => session.health !== 'disconnected')}
           form={form}
-          authorizationLevel={authorizationLevel}
           history={visibleHistory}
           view={centerView}
           busy={busy}
           message={message}
+          authorizationLevel={authorizationLevel}
           onViewChange={setCenterView}
           onFormChange={setForm}
-          onAuthorizationLevelChange={setAuthorizationLevel}
+          codexPaused={codexPaused}
+          onAuthorizationLevelChange={(level) => void changeAuthorizationLevel(level)}
+          onToggleCodexPause={() => void toggleCodexPause()}
           onConnect={() => void openSession()}
           onDisconnect={() => void closeSession()}
           onHealthCheck={() => void checkHealth()}
@@ -341,14 +469,16 @@ export function App(): JSX.Element {
           profile={selectedProfile}
           session={activeSession}
           history={visibleHistory}
+          actions={codrivingActions}
           challenge={hostKeyChallenge}
-          authorizationLevel={authorizationLevel}
           view={inspectorView}
           busy={busy}
           onViewChange={setInspectorView}
           onUploadFiles={uploadFiles}
           onDownloadFile={downloadFile}
           onConfirmHostKey={(challenge) => void confirmHostKeyTrust(challenge)}
+          onApproveAction={(action) => void decideCodrivingAction(action, true)}
+          onRejectAction={(action) => void decideCodrivingAction(action, false)}
         />
       </div>
     </div>

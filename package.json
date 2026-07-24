@@ -8,7 +8,7 @@
   "scripts": {
     "predev": "npm run rebuild:electron",
     "dev": "electron-vite dev",
-    "build:code": "tsc --noEmit && electron-vite build && tsup src/mcp/server.ts --format esm --platform node --target node22 --out-dir dist/mcp --external @napi-rs/keyring --external better-sqlite3 --external better-sqlite3-electron --external ssh2 --external @modelcontextprotocol/sdk --external zod",
+    "build:code": "tsc --noEmit && electron-vite build && tsup src/mcp/server.ts --format esm --platform node --target node22 --out-dir dist/mcp --external @modelcontextprotocol/sdk --external zod && tsup src/runtime/host-entry.ts --format esm --platform node --target node22 --out-dir dist/runtime --external @napi-rs/keyring --external better-sqlite3 --external better-sqlite3-electron --external ssh2 --external zod",
     "build": "npm run rebuild:electron && npm run build:code && npm run verify:sqlite-abis",
     "typecheck": "tsc --noEmit",
     "mcp": "tsx src/mcp/server.ts",

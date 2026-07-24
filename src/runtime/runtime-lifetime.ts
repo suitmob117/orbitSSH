@@ -58,6 +58,14 @@ export class RuntimeLifetime {
     this.desktopExitRequested = true;
   }
 
+  listLeases(updatedAt = new Date().toISOString()): RuntimeLeaseRecord[] {
+    return [
+      ...[...this.clients].map(([id, kind]) => ({ kind, id, updatedAt } as const)),
+      ...[...this.activeActions].map((id) => ({ kind: 'active_action', id, updatedAt } as const)),
+      ...[...this.retainedSessions].map((id) => ({ kind: 'retained_session', id, updatedAt } as const))
+    ];
+  }
+
   snapshot(): RuntimeLifetimeSnapshot {
     const desktopAttached = [...this.clients.values()].includes('desktop');
     const mcpClientCount = [...this.clients.values()].filter((kind) => kind === 'mcp').length;
@@ -81,3 +89,4 @@ export class RuntimeLifetime {
     };
   }
 }
+import type { RuntimeLeaseRecord } from '../shared/types';

@@ -4,8 +4,23 @@ import { createRequire } from 'node:module';
 import path from 'node:path';
 import type BetterSqlite3 from 'better-sqlite3';
 import type { z } from 'zod';
-import type { CommandRecord, ConnectionProfile, TrustedHostKey } from '../shared/types';
-import { commandRecordSchema, connectionProfileSchema, trustedHostKeySchema } from '../shared/validation';
+import type {
+  CodrivingAction,
+  CodrivingSessionState,
+  CommandRecord,
+  ConnectionProfile,
+  RuntimeLeaseRecord,
+  TrustedHostKey
+} from '../shared/types';
+import {
+  codrivingActionSchema,
+  codrivingSessionStateSchema,
+  commandRecordSchema,
+  connectionProfileSchema,
+  runtimeLeaseRecordSchema,
+  trustedHostKeySchema
+} from '../shared/validation';
+import type { CodrivingLedger, CodrivingLedgerSnapshot } from './codriving-ledger';
 import { resolveAppDataDir, resolveSqliteDatabasePath } from './paths';
 
 export type MigrationStatus = {
@@ -84,7 +99,7 @@ class SafeJsonFallbackError extends Error {
   }
 }
 
-export class SqliteStore implements SqliteStorePort {
+export class SqliteStore implements SqliteStorePort, CodrivingLedger {
   private readonly dataDir: string;
   private readonly databasePath: string;
   private database?: BetterSqlite3.Database;
@@ -238,6 +253,95 @@ export class SqliteStore implements SqliteStorePort {
     });
   }
 
+  loadCodrivingState(): CodrivingLedgerSnapshot {
+    return this.runDatabase(() => {
+      const db = this.requireDatabase();
+      const actions = db.prepare(`
+        SELECT action_id, sequence, digest, session_id, actor, kind, status, risk,
+          summary, reason, approval_expires_at, created_at, updated_at
+        FROM session_events ORDER BY sequence
+      `).all().map((row) => this.toCodrivingAction(row as Record<string, unknown>));
+      const sessions = db.prepare(`
+        SELECT session_id, authorization_level, trusted_until, codex_paused, updated_at
+        FROM codriving_session_state ORDER BY rowid
+      `).all().map((row) => this.toCodrivingSessionState(row as Record<string, unknown>));
+      return { actions, sessions };
+    });
+  }
+
+  recordCodrivingAction(action: CodrivingAction): void {
+    const validated = codrivingActionSchema.parse(action);
+    this.assertWritable();
+    this.runDatabase(() => {
+      const db = this.requireDatabase();
+      db.transaction(() => {
+        db.prepare(`
+          INSERT INTO session_events (
+            action_id, sequence, digest, session_id, actor, kind, status, risk,
+            summary, reason, approval_expires_at, created_at, updated_at
+          ) VALUES (
+            @id, @sequence, @digest, @sessionId, @actor, @kind, @status, @risk,
+            @summary, @reason, @approvalExpiresAt, @createdAt, @updatedAt
+          )
+        `).run({ ...validated, approvalExpiresAt: validated.approvalExpiresAt ?? null });
+        if (validated.approvalExpiresAt) {
+          db.prepare(`
+            INSERT INTO approvals (action_id, digest, status, expires_at, decided_at)
+            VALUES (@id, @digest, @status, @expiresAt, @decidedAt)
+            ON CONFLICT(action_id) DO UPDATE SET
+              digest = excluded.digest,
+              status = excluded.status,
+              expires_at = excluded.expires_at,
+              decided_at = excluded.decided_at
+          `).run({
+            id: validated.id,
+            digest: validated.digest,
+            status: validated.status,
+            expiresAt: validated.approvalExpiresAt,
+            decidedAt: validated.status === 'pending_approval' ? null : validated.updatedAt
+          });
+        }
+      })();
+    });
+  }
+
+  saveCodrivingSessionState(state: CodrivingSessionState): void {
+    const validated = codrivingSessionStateSchema.parse(state);
+    this.assertWritable();
+    this.runDatabase(() => {
+      this.requireDatabase().prepare(`
+        INSERT INTO codriving_session_state (
+          session_id, authorization_level, trusted_until, codex_paused, updated_at
+        ) VALUES (@sessionId, @authorizationLevel, @trustedUntil, @codexPaused, @updatedAt)
+        ON CONFLICT(session_id) DO UPDATE SET
+          authorization_level = excluded.authorization_level,
+          trusted_until = excluded.trusted_until,
+          codex_paused = excluded.codex_paused,
+          updated_at = excluded.updated_at
+      `).run({
+        ...validated,
+        trustedUntil: validated.trustedUntil ?? null,
+        codexPaused: validated.codexPaused ? 1 : 0
+      });
+    });
+  }
+
+  replaceRuntimeLeases(leases: RuntimeLeaseRecord[]): void {
+    const validated = leases.map((lease) => runtimeLeaseRecordSchema.parse(lease));
+    this.assertWritable();
+    this.runDatabase(() => {
+      const db = this.requireDatabase();
+      db.transaction(() => {
+        db.prepare('DELETE FROM runtime_leases').run();
+        const insert = db.prepare(`
+          INSERT INTO runtime_leases (lease_type, lease_id, updated_at)
+          VALUES (@kind, @id, @updatedAt)
+        `);
+        for (const lease of validated) insert.run(lease);
+      })();
+    });
+  }
+
   journalMode(): string {
     return this.runDatabase(() => String(this.requireDatabase().pragma('journal_mode', { simple: true })).toLowerCase());
   }
@@ -303,6 +407,44 @@ export class SqliteStore implements SqliteStorePort {
       CREATE TABLE IF NOT EXISTS migration_state (
         key TEXT PRIMARY KEY,
         value TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS session_events (
+        action_id TEXT NOT NULL,
+        sequence INTEGER NOT NULL UNIQUE,
+        digest TEXT NOT NULL,
+        session_id TEXT NOT NULL,
+        actor TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        status TEXT NOT NULL,
+        risk TEXT NOT NULL,
+        summary TEXT NOT NULL,
+        reason TEXT NOT NULL,
+        approval_expires_at TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (action_id, sequence)
+      );
+      CREATE INDEX IF NOT EXISTS session_events_session_sequence
+        ON session_events (session_id, sequence);
+      CREATE TABLE IF NOT EXISTS approvals (
+        action_id TEXT PRIMARY KEY,
+        digest TEXT NOT NULL,
+        status TEXT NOT NULL,
+        expires_at TEXT,
+        decided_at TEXT
+      );
+      CREATE TABLE IF NOT EXISTS codriving_session_state (
+        session_id TEXT PRIMARY KEY,
+        authorization_level TEXT NOT NULL,
+        trusted_until TEXT,
+        codex_paused INTEGER NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS runtime_leases (
+        lease_type TEXT NOT NULL,
+        lease_id TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (lease_type, lease_id)
       );
     `);
     this.ensureProfileTransferColumns();
@@ -698,6 +840,36 @@ export class SqliteStore implements SqliteStorePort {
       trustedAt: row.trusted_at,
       updatedAt: row.updated_at
     });
+  }
+
+  private toCodrivingAction(row: Record<string, unknown>): CodrivingAction {
+    const action: Record<string, unknown> = {
+      id: row.action_id,
+      sequence: row.sequence,
+      digest: row.digest,
+      sessionId: row.session_id,
+      actor: row.actor,
+      kind: row.kind,
+      status: row.status,
+      risk: row.risk,
+      summary: row.summary,
+      reason: row.reason,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at
+    };
+    this.assignOptional(action, 'approvalExpiresAt', row.approval_expires_at);
+    return codrivingActionSchema.parse(action);
+  }
+
+  private toCodrivingSessionState(row: Record<string, unknown>): CodrivingSessionState {
+    const state: Record<string, unknown> = {
+      sessionId: row.session_id,
+      authorizationLevel: row.authorization_level,
+      codexPaused: row.codex_paused === 1,
+      updatedAt: row.updated_at
+    };
+    this.assignOptional(state, 'trustedUntil', row.trusted_until);
+    return codrivingSessionStateSchema.parse(state);
   }
 
   private assignOptional(target: Record<string, unknown>, key: string, value: unknown): void {

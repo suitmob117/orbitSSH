@@ -26,7 +26,6 @@ import {
   Search,
   Server,
   Settings2,
-  ShieldCheck,
   Sun,
   TerminalSquare,
   Upload
@@ -34,6 +33,7 @@ import {
 import type {
   AuthMethod,
   AuthorizationLevel,
+  CodrivingAction,
   CommandRecord,
   ConnectionProfile,
   ConnectionProfileInput,
@@ -289,19 +289,21 @@ function TerminalPanel({
     terminal.loadAddon(fitAddon);
     terminal.open(containerRef.current);
     fitAddon.fit();
-    terminal.writeln('\x1b[38;2;98;238;224m正在打开安全终端…\x1b[0m');
+    terminal.writeln('\x1b[38;2;98;238;224m正在打开共享原始终端…\x1b[0m');
+    terminal.writeln('\x1b[38;2;226;153;62m提示：你的键盘输入将直接发送到服务器，并自动暂停 Codex 后续操作。\x1b[0m');
     terminalRef.current = terminal;
     let disposed = false;
     const unsubscribe = window.aiSsh.onTerminalData((chunk) => {
       if (chunk.terminalId === terminalIdRef.current) terminal.write(chunk.data);
     });
-    void window.aiSsh.openTerminal(session.id).then((terminalId) => {
+    void window.aiSsh.openTerminal(session.id).then(({ terminalId, replay }) => {
       if (disposed) {
         void window.aiSsh.closeTerminal(terminalId);
         return;
       }
       terminalIdRef.current = terminalId;
-      terminal.onData((data) => void window.aiSsh.writeTerminal(terminalId, data));
+      if (replay) terminal.write(replay);
+      terminal.onData((data) => void window.aiSsh.writeTerminal(session.id, terminalId, data));
     }).catch((error: unknown) => {
       terminal.writeln(`\r\n终端打开失败：${error instanceof Error ? error.message : String(error)}`);
     });
@@ -371,8 +373,11 @@ function SessionHeader({
   profile,
   session,
   authorizationLevel,
+  codexPaused,
   busy,
   onAuthorizationLevelChange,
+  onToggleCodexPause,
+  onHealthCheck,
   onConnect,
   onDisconnect,
   onOpenTransfer
@@ -380,8 +385,11 @@ function SessionHeader({
   profile?: ConnectionProfile;
   session?: ConnectionSession;
   authorizationLevel: AuthorizationLevel;
+  codexPaused: boolean;
   busy: boolean;
   onAuthorizationLevelChange: (value: AuthorizationLevel) => void;
+  onToggleCodexPause: () => void;
+  onHealthCheck: () => void;
   onConnect: () => void;
   onDisconnect: () => void;
   onOpenTransfer: () => void;
@@ -400,6 +408,12 @@ function SessionHeader({
         <Select className={cn('authorization-select', AUTH_LEVEL_TONES[authorizationLevel])} value={authorizationLevel} onChange={(event) => onAuthorizationLevelChange(event.target.value as AuthorizationLevel)}>
           {Object.entries(AUTH_LEVEL_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
         </Select>
+        {session ? (
+          <SecondaryButton className={cn(codexPaused && 'is-codex-paused')} onClick={onToggleCodexPause}>
+            {codexPaused ? '恢复共驾' : '接管 Codex'}
+          </SecondaryButton>
+        ) : null}
+        {session ? <SecondaryButton disabled={busy} onClick={onHealthCheck}><RefreshCw />检查连接</SecondaryButton> : null}
         <SecondaryButton onClick={onOpenTransfer} disabled={!profile}><FolderInput />文件舱</SecondaryButton>
         {session ? (
           <DangerButton onClick={onDisconnect}><Power />关闭</DangerButton>
@@ -472,6 +486,7 @@ export function CenterWorkbench({
   sessions,
   form,
   authorizationLevel,
+  codexPaused,
   history,
   view,
   busy,
@@ -479,6 +494,7 @@ export function CenterWorkbench({
   onViewChange,
   onFormChange,
   onAuthorizationLevelChange,
+  onToggleCodexPause,
   onConnect,
   onDisconnect,
   onHealthCheck,
@@ -490,6 +506,7 @@ export function CenterWorkbench({
   sessions: ConnectionSession[];
   form: ConnectionProfileInput;
   authorizationLevel: AuthorizationLevel;
+  codexPaused: boolean;
   history: CommandRecord[];
   view: CenterView;
   busy: boolean;
@@ -497,6 +514,7 @@ export function CenterWorkbench({
   onViewChange: (value: CenterView) => void;
   onFormChange: (form: ConnectionProfileInput) => void;
   onAuthorizationLevelChange: (value: AuthorizationLevel) => void;
+  onToggleCodexPause: () => void;
   onConnect: () => void;
   onDisconnect: () => void;
   onHealthCheck: () => void;
@@ -505,7 +523,7 @@ export function CenterWorkbench({
 }): JSX.Element {
   return (
     <main className="center-workbench">
-      <SessionHeader profile={profile} session={session} authorizationLevel={authorizationLevel} busy={busy} onAuthorizationLevelChange={onAuthorizationLevelChange} onConnect={onConnect} onDisconnect={onDisconnect} onOpenTransfer={onOpenTransfer} />
+      <SessionHeader profile={profile} session={session} authorizationLevel={authorizationLevel} codexPaused={codexPaused} busy={busy} onAuthorizationLevelChange={onAuthorizationLevelChange} onToggleCodexPause={onToggleCodexPause} onHealthCheck={onHealthCheck} onConnect={onConnect} onDisconnect={onDisconnect} onOpenTransfer={onOpenTransfer} />
       {message ? <div className="workbench-toast">{message}</div> : null}
       <section className="workspace-surface workbench-panel">
         <WorkspaceTabs view={view} onChange={onViewChange} />
@@ -518,12 +536,6 @@ export function CenterWorkbench({
         {view === 'config' ? <ProfileEditor form={form} busy={busy} onChange={onFormChange} onSave={onSave} /> : null}
         {view === 'history' ? <HistoryView history={history} /> : null}
       </section>
-      <section className="session-strip">
-        <div className="workbench-panel"><span>会话状态</span><strong className={cn(session && 'is-positive')}>{healthLabel(session?.health)}</strong><p>{session ? `建立于 ${formatTime(session.openedAt)}` : '尚未建立 SSH 会话'}</p></div>
-        <div className="workbench-panel"><span>授权模式</span><strong className={cn('authorization-value', AUTH_LEVEL_TONES[authorizationLevel])}>{AUTH_LEVEL_LABELS[authorizationLevel]}</strong><p>执行策略对当前会话生效</p></div>
-        <div className="workbench-panel"><span>文件边界</span><strong>{profile?.localTransferRoot || profile?.remoteTransferRoots?.length ? '已配置' : '未配置'}</strong><p>{profile?.remoteTransferRoots?.[0] ?? '传输前必须设置允许目录'}</p></div>
-        <button type="button" className="health-action workbench-panel" disabled={!session || busy} onClick={onHealthCheck}><RefreshCw />检查连接</button>
-      </section>
     </main>
   );
 }
@@ -532,10 +544,25 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
   return <label className="form-field"><Label>{label}</Label>{children}</label>;
 }
 
-function ActivityTimeline({ history, session }: { history: CommandRecord[]; session?: ConnectionSession }): JSX.Element {
-  const records = history.slice(-4).reverse();
+function ActivityTimeline({
+  history,
+  actions,
+  session,
+  busy,
+  onApprove,
+  onReject
+}: {
+  history: CommandRecord[];
+  actions: CodrivingAction[];
+  session?: ConnectionSession;
+  busy: boolean;
+  onApprove: (action: CodrivingAction) => void;
+  onReject: (action: CodrivingAction) => void;
+}): JSX.Element {
+  const records = history.slice(-3).reverse();
+  const recentActions = actions.slice(-6).reverse();
   return (
-    <div className={cn('activity-timeline', (session || records.some((record) => !record.finishedAt)) && 'has-live')}>
+    <div className={cn('activity-timeline', (session || recentActions.some((action) => action.status === 'running' || action.status === 'pending_approval')) && 'has-live')}>
       {session ? (
         <div className="activity-event is-live is-normal">
           <i />
@@ -544,6 +571,37 @@ function ActivityTimeline({ history, session }: { history: CommandRecord[]; sess
           <p>会话保持在线，可继续使用终端和文件舱。</p>
         </div>
       ) : null}
+      {recentActions.map((action) => {
+        const live = action.status === 'running' || action.status === 'pending_approval' || action.status === 'paused';
+        const phase = action.status === 'pending_approval'
+          ? '等待批准'
+          : action.status === 'running'
+            ? '进行中'
+            : action.status === 'paused'
+              ? '已暂停'
+              : action.status === 'interrupted'
+                ? '已中断'
+                : '历史';
+        return (
+          <div className={cn('activity-event codriving-event', live ? 'is-live' : 'is-history', action.risk === 'high' ? 'is-high' : 'is-normal', action.status === 'pending_approval' && 'is-pending-approval')} key={action.id}>
+            <i />
+            <div className="activity-event-flags">
+              <span className="activity-phase">{phase}</span>
+              {action.risk === 'high' ? <span className="activity-risk">高危</span> : null}
+              <time>{formatTime(action.updatedAt)}</time>
+            </div>
+            <strong>{action.actor === 'codex' ? 'Codex' : action.actor === 'user' ? '用户' : '系统'} · {action.kind === 'file_transfer' ? '文件操作' : action.kind === 'control' ? '共驾控制' : '执行命令'}</strong>
+            <p>{action.reason}</p>
+            <code>{action.summary}</code>
+            {action.status === 'pending_approval' ? (
+              <div className="codriving-approval-actions">
+                <SecondaryButton disabled={busy} onClick={() => onReject(action)}>拒绝</SecondaryButton>
+                <DangerButton disabled={busy} onClick={() => onApprove(action)}>批准执行</DangerButton>
+              </div>
+            ) : null}
+          </div>
+        );
+      })}
       {records.map((record) => {
         const state = getCommandActivityState(record);
         return (
@@ -560,7 +618,7 @@ function ActivityTimeline({ history, session }: { history: CommandRecord[]; sess
           </div>
         );
       })}
-      {!session && records.length === 0 ? (
+      {!session && records.length === 0 && recentActions.length === 0 ? (
         <div className="activity-event is-live is-normal">
           <i />
           <div className="activity-event-flags"><span className="activity-phase">等待中</span><time>现在</time></div>
@@ -579,20 +637,6 @@ function HostKeyApproval({ challenge, busy, onConfirm }: { challenge: HostKeyTru
       <p>{challenge.risk === 'changed' ? '服务器指纹发生变化，请通过可信渠道核对后再替换。' : '请通过可信渠道核对服务器提供的 SHA-256 指纹。'}</p>
       <code>{challenge.newFingerprint}</code>
       <DangerButton disabled={busy} onClick={onConfirm}>{challenge.risk === 'changed' ? '确认并替换指纹' : '信任此主机'}</DangerButton>
-    </div>
-  );
-}
-
-function SecuritySummary({ profile, challenge, authorizationLevel }: { profile?: ConnectionProfile; challenge?: HostKeyTrustChallenge; authorizationLevel: AuthorizationLevel }): JSX.Element {
-  return (
-    <div className="security-summary">
-      <div className="security-heading"><span>安全态势</span><ShieldCheck /></div>
-      <div className="security-grid">
-        <div><b>执行授权</b><span className={cn('authorization-value', AUTH_LEVEL_TONES[authorizationLevel])}>{AUTH_LEVEL_LABELS[authorizationLevel]}</span></div>
-        <div><b>主机指纹</b><span className={challenge ? 'is-warning' : 'is-positive'}>{challenge ? '等待核对' : '无待确认告警'}</span></div>
-        <div><b>本地边界</b><span>{profile?.localTransferRoot || '尚未配置'}</span></div>
-        <div><b>远程边界</b><span>{profile?.remoteTransferRoots?.[0] ?? '尚未配置'}</span></div>
-      </div>
     </div>
   );
 }
@@ -875,26 +919,30 @@ export function ActivityRail({
   profile,
   session,
   history,
+  actions,
   challenge,
-  authorizationLevel,
   view,
   busy,
   onViewChange,
   onUploadFiles,
   onDownloadFile,
-  onConfirmHostKey
+  onConfirmHostKey,
+  onApproveAction,
+  onRejectAction
 }: {
   profile?: ConnectionProfile;
   session?: ConnectionSession;
   history: CommandRecord[];
+  actions: CodrivingAction[];
   challenge?: HostKeyTrustChallenge;
-  authorizationLevel: AuthorizationLevel;
   view: InspectorView;
   busy: boolean;
   onViewChange: (value: InspectorView) => void;
   onUploadFiles: (files: LocalFileSelection[], remoteDirectory: string) => Promise<void>;
   onDownloadFile: (entry: RemoteFileEntry) => Promise<void>;
   onConfirmHostKey: (challenge: HostKeyTrustChallenge) => void;
+  onApproveAction: (action: CodrivingAction) => void;
+  onRejectAction: (action: CodrivingAction) => void;
 }): JSX.Element {
   return (
     <aside className="activity-rail workbench-panel">
@@ -905,14 +953,13 @@ export function ActivityRail({
       </div>
       <div className="activity-rail-body">
         <div className={cn('rail-view', view !== 'activity' && 'is-hidden')}>
-          <ActivityTimeline history={history} session={session} />
+          <ActivityTimeline history={history} actions={actions} session={session} busy={busy} onApprove={onApproveAction} onReject={onRejectAction} />
           {challenge ? <HostKeyApproval challenge={challenge} busy={busy} onConfirm={() => onConfirmHostKey(challenge)} /> : null}
         </div>
         <div className={cn('rail-view rail-transfer-view', view !== 'transfer' && 'is-hidden')}>
           <TransferPanel profile={profile} session={session} busy={busy} onUploadFiles={onUploadFiles} onDownloadFile={onDownloadFile} />
         </div>
       </div>
-      <SecuritySummary profile={profile} challenge={challenge} authorizationLevel={authorizationLevel} />
     </aside>
   );
 }

@@ -311,6 +311,28 @@ test('高危动作等待审批时冻结同一会话后续 Codex 队列', async (
   assert.deepEqual(execution.commands, []);
 });
 
+test('事件游标能够补回同一动作在批准后的状态更新', async () => {
+  const execution = new FakeExecutionPort();
+  const coordinator = new CodrivingCoordinator(execution);
+  const pending = await coordinator.requestCommand({
+    sessionId: execution.session.id,
+    actor: 'codex',
+    command: 'pwd'
+  });
+
+  assert.equal(pending.action.status, 'pending_approval');
+  const cursor = pending.action.sequence;
+  await coordinator.approveAction({
+    actionId: pending.action.id,
+    digest: pending.action.digest
+  });
+
+  const updates = coordinator.listEvents(execution.session.id, cursor);
+  assert.equal(updates.at(-1)?.id, pending.action.id);
+  assert.equal(updates.at(-1)?.status, 'completed');
+  assert.ok((updates.at(-1)?.sequence ?? 0) > cursor);
+});
+
 test('审批摘要绑定完整命令，即使展示内容脱敏后相同也不能复用', async () => {
   const firstExecution = new FakeExecutionPort();
   const secondExecution = new FakeExecutionPort();
@@ -355,8 +377,41 @@ test('共驾事件使用单调序号支持客户端按游标补回', async () =>
   const execution = new FakeExecutionPort();
   const coordinator = new CodrivingCoordinator(execution);
 
-  await coordinator.requestCommand({ sessionId: execution.session.id, actor: 'user', command: 'pwd' });
-  await coordinator.requestCommand({ sessionId: execution.session.id, actor: 'user', command: 'df -h' });
+  const first = await coordinator.requestCommand({ sessionId: execution.session.id, actor: 'user', command: 'pwd' });
+  const second = await coordinator.requestCommand({ sessionId: execution.session.id, actor: 'user', command: 'df -h' });
 
-  assert.deepEqual(coordinator.listEvents(execution.session.id).map((event) => event.sequence), [1, 2]);
+  assert.deepEqual(
+    coordinator.listEvents(execution.session.id).map((event) => event.sequence),
+    [first.action.sequence, second.action.sequence]
+  );
+  assert.ok(first.action.sequence < second.action.sequence);
+  assert.deepEqual(
+    coordinator.listEvents(execution.session.id, first.action.sequence).map((event) => event.id),
+    [second.action.id]
+  );
+});
+
+test('远端命令已成功后，账本收尾失败不会把结果伪装成执行失败', async () => {
+  const execution = new FakeExecutionPort();
+  execution.session.authorizationLevel = 'auto_readonly';
+  const coordinator = new CodrivingCoordinator(execution, {
+    ledger: {
+      loadCodrivingState: () => ({ actions: [], sessions: [] }),
+      recordCodrivingAction: (action) => {
+        if (action.status === 'completed') throw new Error('ledger unavailable');
+      },
+      saveCodrivingSessionState: () => undefined,
+      replaceRuntimeLeases: () => undefined
+    }
+  });
+
+  const submission = await coordinator.requestCommand({
+    sessionId: execution.session.id,
+    actor: 'codex',
+    command: 'pwd'
+  });
+
+  assert.equal(submission.action.status, 'completed');
+  assert.match(submission.action.reason, /请勿据此重复执行/);
+  assert.deepEqual(execution.commands, ['pwd']);
 });

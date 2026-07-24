@@ -1,11 +1,11 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
-import { createCoreServices } from '../core/services';
 import { registerProcessCleanup } from '../core/process-lifecycle';
+import { connectRuntime } from '../runtime/runtime-client';
 
-const services = createCoreServices();
-registerProcessCleanup(services.close);
+const runtime = await connectRuntime({ kind: 'mcp' });
+registerProcessCleanup(() => { void runtime.close(); });
 
 function text(value: unknown) {
   return {
@@ -29,7 +29,7 @@ server.registerTool(
     title: 'List connection profiles',
     description: 'List saved OrbitSSH connection profiles without secrets.'
   },
-  async () => text(await services.profileStore.list())
+  async () => text(await runtime.call('profiles:list', {}))
 );
 
 server.registerTool(
@@ -38,11 +38,10 @@ server.registerTool(
     title: 'Open connection session',
     description: 'Open or reuse a persistent SSH connection session.',
     inputSchema: {
-      profileId: z.string(),
-      authorizationLevel: z.enum(['ask_every_time', 'auto_readonly', 'trusted_session']).default('ask_every_time')
+      profileId: z.string()
     }
   },
-  async ({ profileId, authorizationLevel }) => text(await services.sessionManager.openSession(profileId, authorizationLevel))
+  async ({ profileId }) => text(await runtime.call('sessions:open', { profileId }))
 );
 
 server.registerTool(
@@ -54,7 +53,7 @@ server.registerTool(
       sessionId: z.string()
     }
   },
-  async ({ sessionId }) => text(await services.sessionManager.getHealth(sessionId))
+  async ({ sessionId }) => text(await runtime.call('sessions:health', { sessionId }))
 );
 
 server.registerTool(
@@ -67,7 +66,7 @@ server.registerTool(
       command: z.string()
     }
   },
-  async ({ sessionId, command }) => text(await services.sessionManager.runCommand(sessionId, command))
+  async ({ sessionId, command }) => text(await runtime.call('commands:request', { sessionId, command }))
 );
 
 server.registerTool(
@@ -82,7 +81,7 @@ server.registerTool(
     }
   },
   async ({ sessionId, localPath, remotePath }) =>
-    text(await services.sessionManager.transferFile({ sessionId, localPath, remotePath, direction: 'upload' }))
+    text(await runtime.call('files:request', { sessionId, localPath, remotePath, direction: 'upload' }))
 );
 
 server.registerTool(
@@ -97,22 +96,7 @@ server.registerTool(
     }
   },
   async ({ sessionId, remotePath, localPath }) =>
-    text(await services.sessionManager.transferFile({ sessionId, localPath, remotePath, direction: 'download' }))
-);
-
-server.registerTool(
-  'close_connection_session',
-  {
-    title: 'Close connection session',
-    description: 'Close a persistent OrbitSSH connection session explicitly.',
-    inputSchema: {
-      sessionId: z.string()
-    }
-  },
-  async ({ sessionId }) => {
-    await services.sessionManager.closeSession(sessionId);
-    return text({ ok: true });
-  }
+    text(await runtime.call('files:request', { sessionId, localPath, remotePath, direction: 'download' }))
 );
 
 const transport = new StdioServerTransport();

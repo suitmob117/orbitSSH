@@ -13,6 +13,7 @@ import type {
 } from '../shared/types';
 import { assessCommand, type CommandRisk } from './command-policy';
 import { redactCommand } from './command-redaction';
+import type { CodrivingLedger } from './codriving-ledger';
 
 export type CommandSubmission = CodrivingCommandSubmission;
 export type FileTransferSubmission = CodrivingFileTransferSubmission;
@@ -29,6 +30,7 @@ export interface CodrivingCoordinatorOptions {
   id?: () => string;
   now?: () => Date;
   approvalTtlMs?: number;
+  ledger?: CodrivingLedger;
 }
 
 interface PendingCommand {
@@ -46,10 +48,12 @@ export class CodrivingCoordinator {
   private readonly pendingFileTransfers = new Map<string, PendingFileTransfer>();
   private readonly events: CodrivingAction[] = [];
   private readonly trustedUntil = new Map<string, string>();
+  private readonly authorizationLevels = new Map<string, AuthorizationLevel>();
   private readonly pausedCodexSessions = new Set<string>();
   private readonly id: () => string;
   private readonly now: () => Date;
   private readonly approvalTtlMs: number;
+  private readonly ledger?: CodrivingLedger;
   private nextSequence = 0;
 
   constructor(
@@ -59,6 +63,8 @@ export class CodrivingCoordinator {
     this.id = options.id ?? randomUUID;
     this.now = options.now ?? (() => new Date());
     this.approvalTtlMs = options.approvalTtlMs ?? 30 * 60_000;
+    this.ledger = options.ledger;
+    this.restoreLedgerState();
   }
 
   async requestCommand(input: {
@@ -79,7 +85,7 @@ export class CodrivingCoordinator {
         reason: pauseReason,
         binding: { command: input.command }
       });
-      this.events.push(action);
+      this.recordNewAction(action);
       return { action: { ...action } };
     }
     const session = this.currentSession(input.sessionId);
@@ -97,7 +103,7 @@ export class CodrivingCoordinator {
       binding: { command: input.command }
     });
 
-    this.events.push(action);
+    this.recordNewAction(action);
     if (action.status === 'pending_approval') {
       this.pendingCommands.set(action.id, { action, command: input.command });
       return { action: { ...action } };
@@ -105,12 +111,10 @@ export class CodrivingCoordinator {
 
     try {
       const result = await this.execution.executeCommand(input.sessionId, input.command);
-      action.status = 'completed';
-      action.updatedAt = this.now().toISOString();
+      this.settleExecutedAction(action, 'completed');
       return { action: { ...action }, result };
     } catch (error) {
-      action.status = 'failed';
-      action.updatedAt = this.now().toISOString();
+      this.settleExecutedAction(action, 'failed');
       throw error;
     }
   }
@@ -131,7 +135,7 @@ export class CodrivingCoordinator {
         reason: pauseReason,
         binding: input.request
       });
-      this.events.push(action);
+      this.recordNewAction(action);
       return { action: { ...action } };
     }
     const session = this.currentSession(input.request.sessionId);
@@ -151,19 +155,17 @@ export class CodrivingCoordinator {
       approvalExpiresAt: requiresApproval ? this.approvalExpiry() : undefined,
       binding: input.request
     });
-    this.events.push(action);
+    this.recordNewAction(action);
     if (action.status === 'pending_approval') {
       this.pendingFileTransfers.set(action.id, { action, request: { ...input.request } });
       return { action: { ...action } };
     }
     try {
       const result = await this.execution.executeFileTransfer(input.request);
-      action.status = 'completed';
-      action.updatedAt = this.now().toISOString();
+      this.settleExecutedAction(action, 'completed');
       return { action: { ...action }, result };
     } catch (error) {
-      action.status = 'failed';
-      action.updatedAt = this.now().toISOString();
+      this.settleExecutedAction(action, 'failed');
       throw error;
     }
   }
@@ -172,6 +174,7 @@ export class CodrivingCoordinator {
     this.expireApprovals();
     return this.events
       .filter((event) => event.sessionId === sessionId && event.sequence > afterSequence)
+      .sort((left, right) => left.sequence - right.sequence)
       .map((event) => ({ ...event }));
   }
 
@@ -193,12 +196,14 @@ export class CodrivingCoordinator {
   pauseCodex(sessionId: string): void {
     this.execution.getSession(sessionId);
     this.pausedCodexSessions.add(sessionId);
+    this.persistSessionState(sessionId);
     this.appendControlEvent(sessionId, '用户接管，Codex 已暂停');
   }
 
   resumeCodex(sessionId: string): void {
     this.execution.getSession(sessionId);
     this.pausedCodexSessions.delete(sessionId);
+    this.persistSessionState(sessionId);
     this.appendControlEvent(sessionId, '用户恢复 Codex 共驾');
   }
 
@@ -220,7 +225,9 @@ export class CodrivingCoordinator {
     } else {
       this.trustedUntil.delete(input.sessionId);
     }
-    return this.execution.setAuthorizationLevel(input.sessionId, input.authorizationLevel);
+    const session = this.execution.setAuthorizationLevel(input.sessionId, input.authorizationLevel);
+    this.persistSessionState(input.sessionId, session.authorizationLevel);
+    return session;
   }
 
   async approveAction(input: { actionId: string; digest: string }): Promise<ApprovedActionSubmission> {
@@ -234,16 +241,13 @@ export class CodrivingCoordinator {
         throw new Error('审批已过期，操作已自动拒绝');
       }
       this.pendingCommands.delete(input.actionId);
-      pending.action.status = 'running';
-      pending.action.updatedAt = this.now().toISOString();
+      this.updateActionStatus(pending.action, 'running');
       try {
         const result = await this.execution.executeCommand(pending.action.sessionId, pending.command);
-        pending.action.status = 'completed';
-        pending.action.updatedAt = this.now().toISOString();
+        this.settleExecutedAction(pending.action, 'completed');
         return { action: { ...pending.action }, result };
       } catch (error) {
-        pending.action.status = 'failed';
-        pending.action.updatedAt = this.now().toISOString();
+        this.settleExecutedAction(pending.action, 'failed');
         throw error;
       }
     }
@@ -256,16 +260,13 @@ export class CodrivingCoordinator {
       throw new Error('审批已过期，操作已自动拒绝');
     }
     this.pendingFileTransfers.delete(input.actionId);
-    pendingTransfer.action.status = 'running';
-    pendingTransfer.action.updatedAt = this.now().toISOString();
+    this.updateActionStatus(pendingTransfer.action, 'running');
     try {
       const result = await this.execution.executeFileTransfer(pendingTransfer.request);
-      pendingTransfer.action.status = 'completed';
-      pendingTransfer.action.updatedAt = this.now().toISOString();
+      this.settleExecutedAction(pendingTransfer.action, 'completed');
       return { action: { ...pendingTransfer.action }, result };
     } catch (error) {
-      pendingTransfer.action.status = 'failed';
-      pendingTransfer.action.updatedAt = this.now().toISOString();
+      this.settleExecutedAction(pendingTransfer.action, 'failed');
       throw error;
     }
   }
@@ -277,9 +278,19 @@ export class CodrivingCoordinator {
     }
     this.pendingCommands.delete(input.actionId);
     this.pendingFileTransfers.delete(input.actionId);
-    pending.action.status = 'rejected';
-    pending.action.updatedAt = this.now().toISOString();
+    this.updateActionStatus(pending.action, 'rejected');
     return { ...pending.action };
+  }
+
+  rejectAllPending(reason = 'Runtime 已关闭，待审批操作未执行'): CodrivingAction[] {
+    const pending = [...this.pendingCommands.values(), ...this.pendingFileTransfers.values()];
+    this.pendingCommands.clear();
+    this.pendingFileTransfers.clear();
+    return pending.map(({ action }) => {
+      action.reason = reason;
+      this.updateActionStatus(action, 'rejected');
+      return { ...action };
+    });
   }
 
   private requiresApproval(
@@ -294,14 +305,21 @@ export class CodrivingCoordinator {
   }
 
   private currentSession(sessionId: string): ConnectionSession {
-    const session = this.execution.getSession(sessionId);
+    let session = this.execution.getSession(sessionId);
+    const persistedLevel = this.authorizationLevels.get(sessionId);
+    if (persistedLevel && persistedLevel !== session.authorizationLevel) {
+      session = this.execution.setAuthorizationLevel(sessionId, persistedLevel);
+    }
     const trustedUntil = this.trustedUntil.get(sessionId);
     if (
       session.authorizationLevel === 'trusted_session' &&
       (!trustedUntil || new Date(trustedUntil).getTime() <= this.now().getTime())
     ) {
       this.trustedUntil.delete(sessionId);
-      return this.execution.setAuthorizationLevel(sessionId, 'ask_every_time');
+      this.authorizationLevels.set(sessionId, 'ask_every_time');
+      const downgraded = this.execution.setAuthorizationLevel(sessionId, 'ask_every_time');
+      this.persistSessionState(sessionId, downgraded.authorizationLevel);
+      return downgraded;
     }
     return session;
   }
@@ -324,13 +342,69 @@ export class CodrivingCoordinator {
     if (!action.approvalExpiresAt || new Date(action.approvalExpiresAt).getTime() > this.now().getTime()) {
       return false;
     }
-    action.status = 'expired';
-    action.updatedAt = this.now().toISOString();
+    this.updateActionStatus(action, 'expired');
     return true;
   }
 
+  private updateActionStatus(action: CodrivingAction, status: CodrivingAction['status']): void {
+    action.status = status;
+    action.sequence = ++this.nextSequence;
+    action.updatedAt = this.now().toISOString();
+    this.ledger?.recordCodrivingAction({ ...action });
+  }
+
+  private settleExecutedAction(
+    action: CodrivingAction,
+    status: Extract<CodrivingAction['status'], 'completed' | 'failed'>
+  ): void {
+    try {
+      this.updateActionStatus(action, status);
+    } catch {
+      action.reason = `${action.reason}；本地共驾账本写入失败，请勿据此重复执行操作`;
+    }
+  }
+
+  private recordNewAction(action: CodrivingAction): void {
+    this.events.push(action);
+    this.ledger?.recordCodrivingAction({ ...action });
+  }
+
+  private persistSessionState(sessionId: string, authorizationLevel?: AuthorizationLevel): void {
+    const level = authorizationLevel ?? this.execution.getSession(sessionId).authorizationLevel;
+    this.authorizationLevels.set(sessionId, level);
+    this.ledger?.saveCodrivingSessionState({
+      sessionId,
+      authorizationLevel: level,
+      trustedUntil: this.trustedUntil.get(sessionId),
+      codexPaused: this.pausedCodexSessions.has(sessionId),
+      updatedAt: this.now().toISOString()
+    });
+  }
+
+  private restoreLedgerState(): void {
+    if (!this.ledger) return;
+    const snapshot = this.ledger.loadCodrivingState();
+    const latestActions = new Map<string, CodrivingAction>();
+    for (const action of snapshot.actions) {
+      this.nextSequence = Math.max(this.nextSequence, action.sequence);
+      const existing = latestActions.get(action.id);
+      if (!existing || action.sequence > existing.sequence) latestActions.set(action.id, { ...action });
+    }
+    this.events.push(...latestActions.values());
+    for (const state of snapshot.sessions) {
+      this.authorizationLevels.set(state.sessionId, state.authorizationLevel);
+      if (state.codexPaused) this.pausedCodexSessions.add(state.sessionId);
+      if (state.trustedUntil) this.trustedUntil.set(state.sessionId, state.trustedUntil);
+    }
+    for (const action of this.events) {
+      if (action.status !== 'pending_approval' && action.status !== 'running') continue;
+      action.reason = `${action.reason}；Runtime 已重新启动，未自动重放该操作`;
+      this.updateActionStatus(action, 'interrupted');
+    }
+  }
+
   private appendControlEvent(sessionId: string, summary: string): void {
-    this.events.push(this.createAction({
+    this.recordNewAction(this.createAction({
       sessionId,
       actor: 'system',
       kind: 'control',

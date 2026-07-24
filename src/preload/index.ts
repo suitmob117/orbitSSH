@@ -32,14 +32,31 @@ const api: AiSshApi = {
     ipcRenderer.invoke('files:pick-download-target', defaultPath, fileName),
   getPathForDroppedFile: (file: File) => webUtils.getPathForFile(file),
   openTerminal: (sessionId: string) => ipcRenderer.invoke('terminal:open', sessionId),
-  runTerminalCommand: (sessionId: string, terminalId: string, command: string) =>
-    ipcRenderer.invoke('terminal:command', sessionId, terminalId, command),
-  writeTerminal: (terminalId: string, data: string) => ipcRenderer.invoke('terminal:write', terminalId, data),
+  writeTerminal: (sessionId: string, terminalId: string, data: string) =>
+    ipcRenderer.invoke('terminal:write', sessionId, terminalId, data),
   closeTerminal: (terminalId: string) => ipcRenderer.invoke('terminal:close', terminalId),
   onTerminalData: (callback: (chunk: TerminalChunk) => void) => {
     const listener = (_event: Electron.IpcRendererEvent, chunk: TerminalChunk) => callback(chunk);
     ipcRenderer.on('terminal:data', listener);
     return () => ipcRenderer.off('terminal:data', listener);
+  },
+  listCodrivingActions: (sessionId: string, afterSequence?: number) =>
+    ipcRenderer.invoke('codriving:events', sessionId, afterSequence),
+  approveCodrivingAction: (approval) => ipcRenderer.invoke('codriving:approve', approval),
+  rejectCodrivingAction: (approval) => ipcRenderer.invoke('codriving:reject', approval),
+  pauseCodex: (sessionId: string) => ipcRenderer.invoke('codriving:pause', sessionId),
+  resumeCodex: (sessionId: string) => ipcRenderer.invoke('codriving:resume', sessionId),
+  isCodexPaused: (sessionId: string) => ipcRenderer.invoke('codriving:paused', sessionId),
+  setSessionAuthorization: (change) => ipcRenderer.invoke('codriving:set-authorization', change),
+  onCodrivingAction: (callback) => {
+    const listener = (_event: Electron.IpcRendererEvent, action: Parameters<typeof callback>[0]) => callback(action);
+    ipcRenderer.on('codriving:action-updated', listener);
+    return () => ipcRenderer.off('codriving:action-updated', listener);
+  },
+  onSessionUpdated: (callback) => {
+    const listener = (_event: Electron.IpcRendererEvent, session: Parameters<typeof callback>[0]) => callback(session);
+    ipcRenderer.on('session:updated', listener);
+    return () => ipcRenderer.off('session:updated', listener);
   }
 };
 

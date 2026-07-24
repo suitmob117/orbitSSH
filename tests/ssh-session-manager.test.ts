@@ -27,6 +27,7 @@ type FakeChannel = EventEmitter & {
 class FakeClient extends EventEmitter {
   connectCalls = 0;
   execCalls = 0;
+  shellCalls = 0;
   sftpCalls = 0;
   execError?: Error;
   sftpError?: Error;
@@ -110,11 +111,19 @@ class FakeClient extends EventEmitter {
     _options: unknown,
     callback: (error: Error | undefined, stream: FakeChannel) => void
   ): void {
+    this.shellCalls += 1;
     const terminalWrites = this.terminalWrites;
     const stream = Object.assign(new EventEmitter(), {
       stderr: new EventEmitter(),
       write(data: string) {
         terminalWrites.push(data);
+        const token = /ORBITSSH:([a-f0-9]+):%s/.exec(data)?.[1];
+        if (token) {
+          queueMicrotask(() => stream.emit(
+            'data',
+            Buffer.from(`${data}\r\n/opt\n\u001eORBITSSH:${token}:0\u001f`)
+          ));
+        }
       },
       end() {
         stream.emit('close');
@@ -612,6 +621,22 @@ test('主会话命令栏写入同一个交互终端，保留远端 shell 的目�
   assert.deepEqual(harness.client.terminalWrites, ['cd /opt\r', 'ls\r']);
   assert.equal(harness.client.execCalls, 0);
   assert.equal(harness.historyRecords.length, 0);
+});
+
+test('Codex 命令复用用户的唯一交互 PTY 并继承当前目录', async () => {
+  const harness = createHarness('ask_every_time');
+  const session = await harness.manager.openSession('profile-1', harness.authorizationLevel);
+  const terminalId = await harness.manager.openTerminal(session.id);
+  harness.manager.writeTerminal(terminalId, 'cd /opt\r');
+
+  const result = await harness.manager.executeCommand(session.id, 'pwd');
+  const reusedTerminalId = await harness.manager.openTerminal(session.id);
+
+  assert.equal(reusedTerminalId, terminalId);
+  assert.equal(harness.client.shellCalls, 1);
+  assert.equal(harness.client.execCalls, 0);
+  assert.equal(result.stdout.trim(), '/opt');
+  assert.match(harness.client.terminalWrites[1] ?? '', /^pwd;/);
 });
 
 test('主会话命令栏仍在写入交互终端前执行授权检查', async () => {

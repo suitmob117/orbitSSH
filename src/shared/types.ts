@@ -10,6 +10,7 @@ export type CodrivingActionStatus =
   | 'failed'
   | 'rejected'
   | 'expired'
+  | 'interrupted'
   | 'paused';
 export type CodrivingRisk = 'readonly' | 'write' | 'high';
 
@@ -48,6 +49,22 @@ export interface SessionAuthorizationChange {
   sessionId: string;
   authorizationLevel: AuthorizationLevel;
   trustedUntil?: string;
+}
+
+export interface CodrivingSessionState {
+  sessionId: string;
+  authorizationLevel: AuthorizationLevel;
+  trustedUntil?: string;
+  codexPaused: boolean;
+  updatedAt: string;
+}
+
+export type RuntimeLeaseKind = 'desktop' | 'mcp' | 'active_action' | 'retained_session';
+
+export interface RuntimeLeaseRecord {
+  kind: RuntimeLeaseKind;
+  id: string;
+  updatedAt: string;
 }
 
 export type SessionHealth = 'connected' | 'degraded' | 'disconnected';
@@ -224,6 +241,11 @@ export interface TerminalChunk {
   data: string;
 }
 
+export interface TerminalSnapshot {
+  terminalId: string;
+  replay: string;
+}
+
 export interface AppStateSnapshot {
   profiles: ConnectionProfile[];
   sessions: ConnectionSession[];
@@ -250,9 +272,19 @@ export interface AiSshApi {
   pickLocalFiles(defaultPath?: string): Promise<LocalFileSelection[]>;
   pickDownloadTarget(defaultPath: string | undefined, fileName: string): Promise<string | undefined>;
   getPathForDroppedFile(file: File): string;
-  openTerminal(sessionId: string): Promise<string>;
-  runTerminalCommand(sessionId: string, terminalId: string, command: string): Promise<void>;
-  writeTerminal(terminalId: string, data: string): Promise<void>;
+  openTerminal(sessionId: string): Promise<TerminalSnapshot>;
+  writeTerminal(sessionId: string, terminalId: string, data: string): Promise<void>;
   closeTerminal(terminalId: string): Promise<void>;
   onTerminalData(callback: (chunk: TerminalChunk) => void): () => void;
+  listCodrivingActions(sessionId: string, afterSequence?: number): Promise<CodrivingAction[]>;
+  approveCodrivingAction(
+    approval: CodrivingApproval
+  ): Promise<CodrivingCommandSubmission | CodrivingFileTransferSubmission>;
+  rejectCodrivingAction(approval: CodrivingApproval): Promise<CodrivingAction>;
+  pauseCodex(sessionId: string): Promise<void>;
+  resumeCodex(sessionId: string): Promise<void>;
+  isCodexPaused(sessionId: string): Promise<boolean>;
+  setSessionAuthorization(change: SessionAuthorizationChange): Promise<ConnectionSession>;
+  onCodrivingAction(callback: (action: CodrivingAction) => void): () => void;
+  onSessionUpdated(callback: (session: ConnectionSession) => void): () => void;
 }

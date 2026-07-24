@@ -48,6 +48,45 @@ export const commandRecordSchema = z.object({
 
 export const authorizationLevelSchema = z.enum(['ask_every_time', 'auto_readonly', 'trusted_session']);
 
+export const codrivingActionSchema = z.object({
+  id: z.string().min(1),
+  sequence: z.number().int().positive(),
+  digest: z.string().regex(/^[a-f0-9]{64}$/),
+  sessionId: z.string().min(1),
+  actor: z.enum(['user', 'codex', 'system']),
+  kind: z.enum(['command', 'file_transfer', 'control']),
+  status: z.enum([
+    'pending_approval',
+    'running',
+    'completed',
+    'failed',
+    'rejected',
+    'expired',
+    'interrupted',
+    'paused'
+  ]),
+  risk: z.enum(['readonly', 'write', 'high']),
+  summary: z.string(),
+  reason: z.string(),
+  approvalExpiresAt: z.string().datetime().optional(),
+  createdAt: z.string().datetime(),
+  updatedAt: z.string().datetime()
+});
+
+export const codrivingSessionStateSchema = z.object({
+  sessionId: z.string().min(1),
+  authorizationLevel: authorizationLevelSchema,
+  trustedUntil: z.string().datetime().optional(),
+  codexPaused: z.boolean(),
+  updatedAt: z.string().datetime()
+});
+
+export const runtimeLeaseRecordSchema = z.object({
+  kind: z.enum(['desktop', 'mcp', 'active_action', 'retained_session']),
+  id: z.string().min(1),
+  updatedAt: z.string().datetime()
+});
+
 export const codrivingApprovalSchema = z.object({
   actionId: z.string().min(1),
   digest: z.string().regex(/^[a-f0-9]{64}$/)
