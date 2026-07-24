@@ -228,12 +228,6 @@ export class RuntimeController {
         if (this.services.sessionManager.getTerminalSessionId(input.terminalId) !== input.sessionId) {
           throw new Error('终端与连接会话不匹配');
         }
-        if (!this.coordinator.isCodexPaused(input.sessionId)) {
-          this.coordinator.pauseCodex(input.sessionId);
-          const events = this.coordinator.listEvents(input.sessionId);
-          const control = events.at(-1);
-          if (control) this.emitAction(control);
-        }
         this.services.sessionManager.writeTerminal(input.terminalId, input.data);
         return { ok: true };
       }
@@ -242,11 +236,11 @@ export class RuntimeController {
         if (this.services.sessionManager.getTerminalSessionId(input.terminalId) !== input.sessionId) {
           throw new Error('终端与连接会话不匹配');
         }
-        return this.services.sessionManager.submitTerminalCommand(
-          input.sessionId,
-          input.terminalId,
-          input.command
-        );
+        return this.trackAction(() => this.coordinator.requestCommand({
+          sessionId: input.sessionId,
+          actor: 'user',
+          command: input.command
+        }));
       }
       case 'terminal:close': {
         const { terminalId } = z.object({ terminalId: idSchema }).strict().parse(params);

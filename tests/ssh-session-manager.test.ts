@@ -51,8 +51,10 @@ class FakeClient extends EventEmitter {
   synchronousHostVerification = false;
   deferHostVerificationError = false;
   delayReady = false;
+  autoCompleteTerminalCommands = true;
   readyError?: Error;
   private readyPending = false;
+  private readonly pendingTerminalCompletions: Array<() => void> = [];
 
   connect(config?: { hostVerifier?: (key: Buffer) => boolean }): this {
     this.connectCalls += 1;
@@ -84,6 +86,12 @@ class FakeClient extends EventEmitter {
     else this.emit('ready');
   }
 
+  completeNextTerminalCommand(): void {
+    const complete = this.pendingTerminalCompletions.shift();
+    if (!complete) throw new Error('没有等待完成的终端命令');
+    complete();
+  }
+
   end(): void {
     this.emit('close');
   }
@@ -113,16 +121,19 @@ class FakeClient extends EventEmitter {
   ): void {
     this.shellCalls += 1;
     const terminalWrites = this.terminalWrites;
+    const client = this;
     const stream = Object.assign(new EventEmitter(), {
       stderr: new EventEmitter(),
       write(data: string) {
         terminalWrites.push(data);
         const token = /ORBITSSH:([a-f0-9]+):%s/.exec(data)?.[1];
         if (token) {
-          queueMicrotask(() => stream.emit(
+          const complete = () => stream.emit(
             'data',
             Buffer.from(`${data}\r\n/opt\n\u001eORBITSSH:${token}:0\u001f`)
-          ));
+          );
+          if (client.autoCompleteTerminalCommands) queueMicrotask(complete);
+          else client.pendingTerminalCompletions.push(complete);
         }
       },
       end() {
@@ -610,20 +621,6 @@ test('command secrets are redacted from history without changing remote executio
   assert.equal(result.record.command, 'echo password=[REDACTED]');
 });
 
-test('用户在交互终端提交普通命令后写入脱敏执行记录', async () => {
-  const harness = createHarness('ask_every_time');
-  const session = await harness.manager.openSession('profile-1', harness.authorizationLevel);
-  const terminalId = await harness.manager.openTerminal(session.id);
-
-  harness.manager.writeTerminal(terminalId, 'echo password=hunter2');
-  const record = await harness.manager.submitTerminalCommand(session.id, terminalId, 'echo password=hunter2');
-
-  assert.deepEqual(harness.client.terminalWrites, ['echo password=hunter2', '\r']);
-  assert.equal(record.command, 'echo password=[REDACTED]');
-  assert.equal(record.exitCode, undefined);
-  assert.equal(harness.historyRecords.length, 1);
-});
-
 test('主会话命令栏写入同一个交互终端，保留远端 shell 的目录和提示符状态', async () => {
   const harness = createHarness('ask_every_time');
   const session = await harness.manager.openSession('profile-1', harness.authorizationLevel);
@@ -651,6 +648,30 @@ test('Codex 命令复用用户的唯一交互 PTY 并继承当前目录', async 
   assert.equal(harness.client.execCalls, 0);
   assert.equal(result.stdout.trim(), '/opt');
   assert.match(harness.client.terminalWrites[1] ?? '', /^pwd;/);
+});
+
+test('共享终端严格按提交顺序执行，前一条完成前不会写入后一条', async () => {
+  const harness = createHarness('ask_every_time');
+  harness.client.autoCompleteTerminalCommands = false;
+  const session = await harness.manager.openSession('profile-1', harness.authorizationLevel);
+  await harness.manager.openTerminal(session.id);
+
+  const first = harness.manager.executeCommand(session.id, 'first-command');
+  const second = harness.manager.executeCommand(session.id, 'second-command');
+  await Promise.resolve();
+  await Promise.resolve();
+
+  assert.equal(harness.client.terminalWrites.length, 1);
+  assert.match(harness.client.terminalWrites[0] ?? '', /^first-command;/);
+
+  harness.client.completeNextTerminalCommand();
+  await first;
+  await Promise.resolve();
+  assert.equal(harness.client.terminalWrites.length, 2);
+  assert.match(harness.client.terminalWrites[1] ?? '', /^second-command;/);
+
+  harness.client.completeNextTerminalCommand();
+  await second;
 });
 
 test('主会话命令栏仍在写入交互终端前执行授权检查', async () => {

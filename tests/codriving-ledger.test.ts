@@ -96,7 +96,7 @@ test('Runtime 重启后保留脱敏轨迹，并把无法安全恢复的待审批
   }
 });
 
-test('Runtime 状态恢复时保留仍有效的信任期限和用户接管状态', async () => {
+test('Runtime 状态恢复时保留仍有效的信任期限和完全接管状态', async () => {
   const dataDir = await mkdtemp(path.join(os.tmpdir(), 'orbitssh-codriving-state-'));
   let store: SqliteStore | undefined;
   try {

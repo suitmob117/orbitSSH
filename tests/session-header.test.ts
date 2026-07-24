@@ -30,7 +30,29 @@ test('会话操作使用带中文提示的纯图标按钮', () => {
     onOpenTransfer: noop
   }));
 
-  for (const label of ['接管 Codex', '检查连接', '打开文件舱', '关闭连接']) {
+  const codexSwitch = html.match(/<button[^>]*aria-label="完全接管：暂停 Codex"[^>]*>[\s\S]*?<\/button>/)?.[0];
+  assert.ok(codexSwitch, '缺少 Codex 接入开关');
+  assert.match(codexSwitch, /role="switch"/);
+  assert.match(codexSwitch, /aria-checked="true"/);
+
+  const pausedHtml = renderToStaticMarkup(createElement(SessionHeader, {
+    profile,
+    session,
+    authorizationLevel: 'ask_every_time',
+    codexPaused: true,
+    busy: false,
+    onAuthorizationLevelChange: noop,
+    onToggleCodexPause: noop,
+    onHealthCheck: noop,
+    onConnect: noop,
+    onDisconnect: noop,
+    onOpenTransfer: noop
+  }));
+  assert.match(pausedHtml, /aria-label="恢复 Codex 操作权"/);
+  assert.match(pausedHtml, /role="switch"/);
+  assert.match(pausedHtml, /aria-checked="false"/);
+
+  for (const label of ['检查连接', '打开文件舱', '关闭连接']) {
     const button = html.match(new RegExp(`<button[^>]*aria-label="${label}"[^>]*>[\\s\\S]*?<\\/button>`))?.[0];
     assert.ok(button, `缺少“${label}”图标按钮及其无障碍名称`);
     assert.match(button, new RegExp(`title="${label}"`), `“${label}”缺少悬停提示`);

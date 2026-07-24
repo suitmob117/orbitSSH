@@ -22,9 +22,15 @@ export type ApprovedActionSubmission = CodrivingCommandSubmission | CodrivingFil
 export interface CodrivingExecutionPort {
   getSession(sessionId: string): ConnectionSession;
   setAuthorizationLevel(sessionId: string, authorizationLevel: AuthorizationLevel): ConnectionSession;
-  executeCommand(sessionId: string, command: string): Promise<CommandResult>;
+  executeCommand(
+    sessionId: string,
+    command: string,
+    options?: { echoCommand?: boolean; beforeStart?: () => void }
+  ): Promise<CommandResult>;
   executeFileTransfer(request: FileTransferRequest): Promise<FileTransferResult>;
 }
+
+class CodexAccessPausedError extends Error {}
 
 export interface CodrivingCoordinatorOptions {
   id?: () => string;
@@ -110,10 +116,18 @@ export class CodrivingCoordinator {
     }
 
     try {
-      const result = await this.execution.executeCommand(input.sessionId, input.command);
+      const result = await this.execution.executeCommand(input.sessionId, input.command, {
+        echoCommand: input.actor === 'codex',
+        beforeStart: input.actor === 'codex' ? () => this.assertCodexCanStart(input.sessionId) : undefined
+      });
       this.settleExecutedAction(action, 'completed');
       return { action: { ...action }, result };
     } catch (error) {
+      if (error instanceof CodexAccessPausedError) {
+        action.reason = error.message;
+        this.updateActionStatus(action, 'paused');
+        return { action: { ...action } };
+      }
       this.settleExecutedAction(action, 'failed');
       throw error;
     }
@@ -197,14 +211,14 @@ export class CodrivingCoordinator {
     this.execution.getSession(sessionId);
     this.pausedCodexSessions.add(sessionId);
     this.persistSessionState(sessionId);
-    this.appendControlEvent(sessionId, '用户接管，Codex 已暂停');
+    this.appendControlEvent(sessionId, '用户已完全接管，Codex 新操作已暂停');
   }
 
   resumeCodex(sessionId: string): void {
     this.execution.getSession(sessionId);
     this.pausedCodexSessions.delete(sessionId);
     this.persistSessionState(sessionId);
-    this.appendControlEvent(sessionId, '用户恢复 Codex 共驾');
+    this.appendControlEvent(sessionId, '用户已恢复 Codex 操作权');
   }
 
   isCodexPaused(sessionId: string): boolean {
@@ -243,10 +257,20 @@ export class CodrivingCoordinator {
       this.pendingCommands.delete(input.actionId);
       this.updateActionStatus(pending.action, 'running');
       try {
-        const result = await this.execution.executeCommand(pending.action.sessionId, pending.command);
+        const result = await this.execution.executeCommand(pending.action.sessionId, pending.command, {
+          echoCommand: pending.action.actor === 'codex',
+          beforeStart: pending.action.actor === 'codex'
+            ? () => this.assertCodexCanStart(pending.action.sessionId)
+            : undefined
+        });
         this.settleExecutedAction(pending.action, 'completed');
         return { action: { ...pending.action }, result };
       } catch (error) {
+        if (error instanceof CodexAccessPausedError) {
+          pending.action.reason = error.message;
+          this.updateActionStatus(pending.action, 'paused');
+          return { action: { ...pending.action } };
+        }
         this.settleExecutedAction(pending.action, 'failed');
         throw error;
       }
@@ -327,11 +351,17 @@ export class CodrivingCoordinator {
   private codexPauseReason(sessionId: string): string | undefined {
     this.expireApprovals();
     if (this.pausedCodexSessions.has(sessionId)) {
-      return '用户已接管当前会话，Codex 操作暂停';
+      return '用户已完全接管当前会话，Codex 新操作已暂停';
     }
     const hasPendingApproval = [...this.pendingCommands.values(), ...this.pendingFileTransfers.values()]
       .some((pending) => pending.action.sessionId === sessionId);
     return hasPendingApproval ? '当前会话存在待审批动作，后续 Codex 队列已暂停' : undefined;
+  }
+
+  private assertCodexCanStart(sessionId: string): void {
+    if (this.pausedCodexSessions.has(sessionId)) {
+      throw new CodexAccessPausedError('用户已完全接管当前会话，排队中的 Codex 操作未执行');
+    }
   }
 
   private approvalExpiry(): string {

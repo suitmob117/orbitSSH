@@ -24,8 +24,10 @@ function commandResult(command: string): CommandResult {
 
 class FakeExecutionPort implements CodrivingExecutionPort {
   readonly commands: string[] = [];
+  readonly commandEchoOptions: Array<boolean | undefined> = [];
   readonly transfers: FileTransferRequest[] = [];
   commandError?: Error;
+  commandStartGate?: Promise<void>;
   readonly session: ConnectionSession = {
     id: 'session-1',
     profileId: 'profile-1',
@@ -46,8 +48,15 @@ class FakeExecutionPort implements CodrivingExecutionPort {
     return this.session;
   }
 
-  async executeCommand(sessionId: string, command: string): Promise<CommandResult> {
+  async executeCommand(
+    sessionId: string,
+    command: string,
+    options?: { echoCommand?: boolean; beforeStart?: () => void }
+  ): Promise<CommandResult> {
     assert.equal(sessionId, this.session.id);
+    this.commandEchoOptions.push(options?.echoCommand);
+    if (this.commandStartGate) await this.commandStartGate;
+    options?.beforeStart?.();
     this.commands.push(command);
     if (this.commandError) throw this.commandError;
     return commandResult(command);
@@ -65,6 +74,38 @@ class FakeExecutionPort implements CodrivingExecutionPort {
     };
   }
 }
+
+test('用户命令沿用本地输入回显，Codex 命令在共享终端主动显示', async () => {
+  const execution = new FakeExecutionPort();
+  execution.session.authorizationLevel = 'auto_readonly';
+  const coordinator = new CodrivingCoordinator(execution);
+
+  await coordinator.requestCommand({ sessionId: execution.session.id, actor: 'user', command: 'pwd' });
+  await coordinator.requestCommand({ sessionId: execution.session.id, actor: 'codex', command: 'df -h' });
+
+  assert.deepEqual(execution.commandEchoOptions, [false, true]);
+});
+
+test('完全接管会阻止已经排队但尚未开始的 Codex 命令', async () => {
+  let releaseStart!: () => void;
+  const execution = new FakeExecutionPort();
+  execution.session.authorizationLevel = 'auto_readonly';
+  execution.commandStartGate = new Promise<void>((resolve) => { releaseStart = resolve; });
+  const coordinator = new CodrivingCoordinator(execution);
+
+  const queued = coordinator.requestCommand({
+    sessionId: execution.session.id,
+    actor: 'codex',
+    command: 'df -h'
+  });
+  await Promise.resolve();
+  coordinator.pauseCodex(execution.session.id);
+  releaseStart();
+
+  const submission = await queued;
+  assert.equal(submission.action.status, 'paused');
+  assert.deepEqual(execution.commands, []);
+});
 
 test('每次询问模式下 Codex 命令先形成待审批动作，不直接执行', async () => {
   const execution = new FakeExecutionPort();
@@ -167,7 +208,7 @@ test('审批摘要不匹配时拒绝执行', async () => {
   assert.deepEqual(execution.commands, []);
 });
 
-test('用户接管会暂停新的 Codex 动作，但不影响用户直接操作', async () => {
+test('完全接管会暂停新的 Codex 动作，但不影响用户直接操作', async () => {
   const execution = new FakeExecutionPort();
   execution.session.authorizationLevel = 'trusted_session';
   const coordinator = new CodrivingCoordinator(execution);

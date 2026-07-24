@@ -37,17 +37,7 @@ function createHarness(notifier?: { notifyPendingApproval(): void }) {
       stderr: ''
     }),
     getTerminalSessionId: () => session.id,
-    writeTerminal: (_terminalId: string, data: string) => terminalWrites.push(data),
-    submitTerminalCommand: async (_sessionId: string, _terminalId: string, command: string) => ({
-      id: 'interactive-record-1',
-      sessionId: session.id,
-      command,
-      startedAt: '',
-      finishedAt: '',
-      stdoutTail: '',
-      stderrTail: '',
-      summary: '交互终端'
-    })
+    writeTerminal: (_terminalId: string, data: string) => terminalWrites.push(data)
   });
   const coordinator = new CodrivingCoordinator(sessionManager as never);
   const controller = new RuntimeController({
@@ -128,7 +118,7 @@ test('MCP 只能复用会话，不能自行提升 Codex 授权等级', async () 
   assert.equal(session.authorizationLevel, 'ask_every_time');
 });
 
-test('用户在原始终端输入时自动暂停 Codex 后续操作', async () => {
+test('用户操作终端不会自动断开 Codex，后续动作仍按授权规则处理', async () => {
   const { controller, terminalWrites } = createHarness();
 
   await controller.handle(
@@ -143,18 +133,25 @@ test('用户在原始终端输入时自动暂停 Codex 后续操作', async () =
   );
 
   assert.deepEqual(terminalWrites, ['l']);
-  assert.equal((submission as { action: { status: string } }).action.status, 'paused');
+  assert.equal((submission as { action: { status: string } }).action.status, 'pending_approval');
+  assert.equal(await controller.handle(
+    'codriving:paused',
+    { sessionId: 'session-1' },
+    { clientId: 'desktop-1', kind: 'desktop' }
+  ), false);
 });
 
-test('只有桌面客户端可以提交交互终端命令记录', async () => {
+test('桌面终端命令通过共驾协调器提交，MCP 不能冒充用户终端', async () => {
   const { controller } = createHarness();
 
-  const record = await controller.handle(
+  const submission = await controller.handle(
     'terminal:submit',
     { sessionId: 'session-1', terminalId: 'terminal-1', command: 'pwd' },
     { clientId: 'desktop-1', kind: 'desktop' }
   );
-  assert.equal((record as { command: string }).command, 'pwd');
+  assert.equal((submission as { action: { actor: string; status: string } }).action.actor, 'user');
+  assert.equal((submission as { action: { status: string } }).action.status, 'completed');
+  assert.equal((submission as { result: { record: { command: string } } }).result.record.command, 'pwd');
 
   await assert.rejects(
     controller.handle(

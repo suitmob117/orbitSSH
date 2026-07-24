@@ -40,6 +40,7 @@ interface ManagedSession {
 
 interface PendingTerminalCommand {
   command: string;
+  echoCommand: boolean;
   wrapper: string;
   markerPrefix: string;
   buffer: string;
@@ -262,14 +263,23 @@ export class SshSessionManager extends EventEmitter {
     return this.recordCommand(sessionId, command, startedAt, result);
   }
 
-  async executeCommand(sessionId: string, command: string): Promise<CommandResult> {
+  async executeCommand(
+    sessionId: string,
+    command: string,
+    options: { echoCommand?: boolean; beforeStart?: () => void } = {}
+  ): Promise<CommandResult> {
     const managed = this.getManaged(sessionId);
     if (managed.session.health === 'disconnected') {
       throw new Error('连接会话已断开，请重新连接');
     }
     const startedAt = new Date().toISOString();
     await this.openTerminal(sessionId);
-    const result = await this.enqueueTerminalCommand(managed, command);
+    const result = await this.enqueueTerminalCommand(
+      managed,
+      command,
+      options.echoCommand ?? true,
+      options.beforeStart
+    );
     return this.recordCommand(sessionId, command, startedAt, result);
   }
 
@@ -470,31 +480,6 @@ export class SshSessionManager extends EventEmitter {
     terminal.stream.write(data);
   }
 
-  async submitTerminalCommand(
-    sessionId: string,
-    terminalId: string,
-    command: string
-  ): Promise<CommandRecord> {
-    const managed = this.getManaged(sessionId);
-    const terminal = managed.terminal;
-    if (!terminal || terminal.id !== terminalId) {
-      throw new Error(`当前会话中不存在终端：${terminalId}`);
-    }
-    enforceCommandAuthorization(managed.session.authorizationLevel, command);
-    const timestamp = new Date().toISOString();
-    const record = await this.history.append({
-      sessionId,
-      command: redactCommand(command),
-      startedAt: timestamp,
-      finishedAt: timestamp,
-      stdoutTail: '',
-      stderrTail: '',
-      summary: '用户通过主会话终端执行；命令输出保留在终端回放中。'
-    });
-    terminal.stream.write('\r');
-    return record;
-  }
-
   closeTerminal(terminalId: string): void {
     // Renderer 离开只会解除观察；共享 PTY 由 Runtime 会话持有，关闭会话时才销毁。
     this.findTerminal(terminalId);
@@ -502,17 +487,23 @@ export class SshSessionManager extends EventEmitter {
 
   private enqueueTerminalCommand(
     managed: ManagedSession,
-    command: string
+    command: string,
+    echoCommand: boolean,
+    beforeStart?: () => void
   ): Promise<{ stdout: string; stderr: string; exitCode?: number }> {
     const previous = managed.commandTail;
     let release!: () => void;
     managed.commandTail = new Promise<void>((resolve) => { release = resolve; });
-    return previous.then(() => this.executeTerminalCommand(managed, command)).finally(release);
+    return previous.then(() => {
+      beforeStart?.();
+      return this.executeTerminalCommand(managed, command, echoCommand);
+    }).finally(release);
   }
 
   private executeTerminalCommand(
     managed: ManagedSession,
-    command: string
+    command: string,
+    echoCommand: boolean
   ): Promise<{ stdout: string; stderr: string; exitCode?: number }> {
     const terminal = managed.terminal;
     if (!terminal) throw new Error('共享终端尚未建立');
@@ -528,6 +519,7 @@ export class SshSessionManager extends EventEmitter {
       }, 120_000);
       terminal.pending = {
         command,
+        echoCommand,
         wrapper,
         markerPrefix,
         buffer: '',
@@ -554,7 +546,7 @@ export class SshSessionManager extends EventEmitter {
       if (wrapperStart >= 0) {
         const prefix = pending.buffer.slice(0, wrapperStart);
         if (prefix) this.emitTerminalData(terminal, prefix);
-        this.emitTerminalData(terminal, `${pending.command}\r`);
+        if (pending.echoCommand) this.emitTerminalData(terminal, `${pending.command}\r`);
         pending.buffer = pending.buffer.slice(wrapperStart + pending.wrapper.length);
         pending.echoHandled = true;
       } else if (pending.buffer.includes(pending.markerPrefix) || pending.buffer.length > pending.wrapper.length + 1024) {

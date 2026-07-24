@@ -368,7 +368,7 @@ export function App(): JSX.Element {
       else await window.aiSsh.pauseCodex(activeSession.id);
       setCodexPaused(!codexPaused);
       await refreshCodrivingActions(activeSession.id);
-      setMessage(codexPaused ? 'Codex 已恢复共驾' : '你已接管终端，Codex 后续操作已暂停');
+      setMessage(codexPaused ? 'Codex 操作权已恢复' : '已完全接管，Codex 新操作已暂停');
     } finally {
       setBusy(false);
     }

@@ -274,7 +274,11 @@ export interface AiSshApi {
   getPathForDroppedFile(file: File): string;
   openTerminal(sessionId: string): Promise<TerminalSnapshot>;
   writeTerminal(sessionId: string, terminalId: string, data: string): Promise<void>;
-  submitTerminalCommand(sessionId: string, terminalId: string, command: string): Promise<CommandRecord>;
+  submitTerminalCommand(
+    sessionId: string,
+    terminalId: string,
+    command: string
+  ): Promise<CodrivingCommandSubmission>;
   closeTerminal(terminalId: string): Promise<void>;
   onTerminalData(callback: (chunk: TerminalChunk) => void): () => void;
   listCodrivingActions(sessionId: string, afterSequence?: number): Promise<CodrivingAction[]>;

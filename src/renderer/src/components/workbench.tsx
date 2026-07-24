@@ -43,7 +43,7 @@ import { Button, DangerButton, Input, Label, SecondaryButton, Select } from './u
 import { SessionHeader } from './session-header';
 import { cn } from '../lib/utils';
 import { getCommandActivityState, takeRecentChronological } from '../lib/activity';
-import { TerminalCommandTracker } from '../lib/terminal-command-tracker';
+import { formatTerminalEcho, TerminalCommandTracker } from '../lib/terminal-command-tracker';
 import {
   formatFileSize,
   getRemoteParent,
@@ -278,8 +278,8 @@ function TerminalPanel({
     terminal.loadAddon(fitAddon);
     terminal.open(containerRef.current);
     fitAddon.fit();
-    terminal.writeln('\x1b[38;2;98;238;224m正在打开共享原始终端…\x1b[0m');
-    terminal.writeln('\x1b[38;2;226;153;62m提示：你的键盘输入将直接发送到服务器，并自动暂停 Codex 后续操作。\x1b[0m');
+    terminal.writeln('\x1b[38;2;98;238;224m正在打开共享共驾终端…\x1b[0m');
+    terminal.writeln('\x1b[38;2;226;153;62m提示：你和 Codex 的普通命令会按提交顺序执行；需要独占终端时，请打开会话头的“完全接管”开关。\x1b[0m');
     terminalRef.current = terminal;
     let disposed = false;
     const unsubscribe = window.aiSsh.onTerminalData((chunk) => {
@@ -293,22 +293,32 @@ function TerminalPanel({
       terminalIdRef.current = terminalId;
       if (replay) terminal.write(replay);
       const tracker = new TerminalCommandTracker();
-      let inputQueue = Promise.resolve();
       terminal.onData((data) => {
         const actions = tracker.consume(data);
-        inputQueue = inputQueue.then(async () => {
-          for (const action of actions) {
-            if (action.type === 'write') {
-              await window.aiSsh.writeTerminal(session.id, terminalId, action.data);
-            } else {
-              const record = await window.aiSsh.submitTerminalCommand(session.id, terminalId, action.command);
-              onCommandRecorded(record);
-            }
+        for (const action of actions) {
+          if (action.type === 'echo') {
+            const echo = formatTerminalEcho(action.data);
+            if (echo) terminal.write(echo);
+            continue;
           }
-        }).catch(async (error: unknown) => {
-          await window.aiSsh.writeTerminal(session.id, terminalId, '\x03').catch(() => undefined);
-          terminal.writeln(`\r\n命令未执行：${error instanceof Error ? error.message : String(error)}`);
-        });
+          if (action.type === 'interrupt') {
+            void window.aiSsh.writeTerminal(session.id, terminalId, '\x03').catch((error: unknown) => {
+              terminal.writeln(`\r\n中断未发送：${error instanceof Error ? error.message : String(error)}`);
+            });
+            continue;
+          }
+          if (action.type === 'unsupported') {
+            terminal.writeln('\r\n当前共驾队列暂不支持 Tab 补全或方向键历史，本次输入未发送。');
+            continue;
+          }
+          terminal.write('\r\n');
+          void window.aiSsh.submitTerminalCommand(session.id, terminalId, action.command).then((submission) => {
+            if (submission.result) onCommandRecorded(submission.result.record);
+            else terminal.writeln('[等待批准] 命令尚未发送到服务器。');
+          }).catch((error: unknown) => {
+            terminal.writeln(`命令未执行：${error instanceof Error ? error.message : String(error)}`);
+          });
+        }
       });
     }).catch((error: unknown) => {
       terminal.writeln(`\r\n终端打开失败：${error instanceof Error ? error.message : String(error)}`);

@@ -289,6 +289,12 @@ button svg { width: 15px; height: 15px; stroke-width: 1.7; }
 .session-controls button { height: 32px; padding: 0 11px; font-size: 12px; }
 .session-controls .session-action-button { width: 36px; min-width: 36px; padding: 0; }
 .session-controls .session-action-button svg { width: 16px; height: 16px; stroke-width: 2; }
+.session-controls .codex-access-switch { width: 52px; min-width: 52px; padding: 0 7px; overflow: visible; }
+.codex-switch-track { position: relative; width: 36px; height: 18px; border: 1px solid currentColor; border-radius: 999px; background: hsl(var(--muted)/.65); box-shadow: inset 0 2px 5px rgba(0,0,0,.22); transition: .2s ease; }
+.codex-switch-track i { position: absolute; top: 3px; left: 3px; width: 10px; height: 10px; border-radius: 50%; background: currentColor; box-shadow: 0 0 6px currentColor; transition: transform .2s ease; }
+.codex-access-switch.is-connected { border-color: rgb(var(--online-rgb)/.62); color: rgb(var(--online-rgb)); background: rgb(var(--online-rgb)/.1); box-shadow: inset 0 0 10px rgb(var(--online-rgb)/.1),0 0 9px rgb(var(--online-rgb)/.2); }
+.codex-access-switch.is-connected .codex-switch-track i { transform: translateX(18px); }
+.codex-access-switch.is-disconnected { border-color: rgb(var(--risk-high-rgb)/.48); color: rgb(var(--risk-high-rgb)); background: rgb(var(--risk-high-rgb)/.08); }
 .trust-state { display: inline-flex; align-items: center; gap: 7px; padding: 7px 9px; border: 1px solid var(--panel-line); border-radius: 9px; color: hsl(var(--muted-foreground)); background: hsl(var(--muted)/.25); font-size: 11px; white-space: nowrap; }
 .trust-state i { width: 6px; height: 6px; flex: 0 0 auto; border-radius: 50%; background: currentColor; }
 .trust-state.is-trusted { color: hsl(var(--accent)); border-color: hsl(var(--accent)/.2); background: hsl(var(--accent)/.055); }
@@ -418,7 +424,6 @@ button svg { width: 15px; height: 15px; stroke-width: 1.7; }
 .activity-event.is-pending-approval { margin-left: 1px; padding: 11px 10px 11px 34px; border: 1px solid rgb(var(--risk-high-rgb)/.28); border-radius: 10px; background: rgb(var(--risk-high-rgb)/.045); }
 .codriving-approval-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 10px; }
 .codriving-approval-actions button { height: 30px; padding-inline: 11px; font-size: 12px; font-weight: 650; }
-.session-controls .is-codex-paused { border-color: rgb(var(--risk-readonly-rgb)/.55); color: rgb(var(--risk-readonly-rgb)); background: rgb(var(--risk-readonly-rgb)/.1); }
 .green .activity-rail-head,
 .green .activity-rail-body,
 .green .security-summary,

@@ -1,6 +1,19 @@
 export type TerminalInputAction =
-  | { type: 'write'; data: string }
-  | { type: 'submit'; command: string };
+  | { type: 'echo'; data: string }
+  | { type: 'submit'; command: string }
+  | { type: 'interrupt' }
+  | { type: 'unsupported' };
+
+export function formatTerminalEcho(data: string): string {
+  let output = '';
+  const visibleData = data.replace(/\x1b(?:\[[0-?]*[ -/]*[@-~]|O.)/g, '');
+  for (const character of visibleData) {
+    if (character === '\b' || character === '\x7f') output += '\b \b';
+    else if (character === '\r' || character === '\n') output += '\r\n';
+    else if (character >= ' ' && character !== '\x7f') output += character;
+  }
+  return output;
+}
 
 /**
  * 只跟踪普通单行输入；按键仍由原始 PTY 处理，不在前端模拟 shell。
@@ -13,11 +26,11 @@ export class TerminalCommandTracker {
 
   consume(data: string): TerminalInputAction[] {
     const actions: TerminalInputAction[] = [];
-    let writeBuffer = '';
-    const flushWrite = (): void => {
-      if (!writeBuffer) return;
-      actions.push({ type: 'write', data: writeBuffer });
-      writeBuffer = '';
+    let echoBuffer = '';
+    const flushEcho = (): void => {
+      if (!echoBuffer) return;
+      actions.push({ type: 'echo', data: echoBuffer });
+      echoBuffer = '';
     };
 
     for (let index = 0; index < data.length; index += 1) {
@@ -30,37 +43,42 @@ export class TerminalCommandTracker {
       this.previousWasCarriageReturn = character === '\r';
 
       if (character === '\r' || character === '\n') {
-        flushWrite();
+        flushEcho();
         const command = this.command.trim();
         this.command = '';
-        actions.push(command && this.trackable ? { type: 'submit', command } : { type: 'write', data: character });
+        actions.push(command && this.trackable
+          ? { type: 'submit', command }
+          : this.trackable
+            ? { type: 'echo', data: character }
+            : { type: 'unsupported' });
         this.trackable = true;
         continue;
       }
 
       if (character === '\x03') {
+        flushEcho();
         this.command = '';
         this.trackable = true;
-        writeBuffer += character;
+        actions.push({ type: 'interrupt' });
         continue;
       }
 
       if (character === '\b' || character === '\x7f') {
         this.command = [...this.command].slice(0, -1).join('');
-        writeBuffer += character;
+        echoBuffer += character;
         continue;
       }
 
       if (character === '\x1b') {
         const rest = data.slice(index);
         const sequence = rest.match(/^\x1b(?:\[[0-?]*[ -/]*[@-~]|O.)/)?.[0] ?? character;
-        writeBuffer += sequence;
+        echoBuffer += sequence;
         this.trackable = false;
         index += sequence.length - 1;
         continue;
       }
 
-      writeBuffer += character;
+      echoBuffer += character;
       if (character >= ' ' && character !== '\x7f') {
         this.command += character;
       } else {
@@ -68,7 +86,7 @@ export class TerminalCommandTracker {
       }
     }
 
-    flushWrite();
+    flushEcho();
     return actions;
   }
 }

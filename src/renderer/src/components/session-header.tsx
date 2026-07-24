@@ -1,4 +1,4 @@
-import { FolderInput, Pause, Play, PlugZap, Power, RefreshCw, Server } from 'lucide-react';
+import { FolderInput, PlugZap, Power, RefreshCw, Server } from 'lucide-react';
 import type { AuthorizationLevel, ConnectionProfile, ConnectionSession } from '@shared/types';
 import { Button, DangerButton, SecondaryButton, Select } from './ui';
 import { cn } from '../lib/utils';
@@ -45,6 +45,23 @@ function SessionActionButton({
   );
 }
 
+function CodexAccessSwitch({ paused, onToggle }: { paused: boolean; onToggle: () => void }): JSX.Element {
+  const label = paused ? '恢复 Codex 操作权' : '完全接管：暂停 Codex';
+  return (
+    <SecondaryButton
+      type="button"
+      role="switch"
+      aria-checked={!paused}
+      aria-label={label}
+      title={label}
+      className={cn('codex-access-switch', paused ? 'is-disconnected' : 'is-connected')}
+      onClick={onToggle}
+    >
+      <span className="codex-switch-track" aria-hidden="true"><i /></span>
+    </SecondaryButton>
+  );
+}
+
 export function SessionHeader({
   profile,
   session,
@@ -85,13 +102,7 @@ export function SessionHeader({
           {Object.entries(AUTH_LEVEL_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
         </Select>
         {session ? (
-          <SessionActionButton
-            label={codexPaused ? '恢复 Codex 共驾' : '接管 Codex'}
-            className={cn(codexPaused && 'is-codex-paused')}
-            onClick={onToggleCodexPause}
-          >
-            {codexPaused ? <Play /> : <Pause />}
-          </SessionActionButton>
+          <CodexAccessSwitch paused={codexPaused} onToggle={onToggleCodexPause} />
         ) : null}
         {session ? <SessionActionButton label="检查连接" disabled={busy} onClick={onHealthCheck}><RefreshCw /></SessionActionButton> : null}
         <SessionActionButton label="打开文件舱" onClick={onOpenTransfer} disabled={!profile}><FolderInput /></SessionActionButton>
