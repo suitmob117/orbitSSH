@@ -5,6 +5,7 @@ import path from 'node:path';
 import { Client, type ConnectConfig, type ClientChannel } from 'ssh2';
 import type {
   AuthorizationLevel,
+  CommandRecord,
   CommandResult,
   ConnectionProfile,
   ConnectionSession,
@@ -467,6 +468,31 @@ export class SshSessionManager extends EventEmitter {
   writeTerminal(terminalId: string, data: string): void {
     const terminal = this.findTerminal(terminalId);
     terminal.stream.write(data);
+  }
+
+  async submitTerminalCommand(
+    sessionId: string,
+    terminalId: string,
+    command: string
+  ): Promise<CommandRecord> {
+    const managed = this.getManaged(sessionId);
+    const terminal = managed.terminal;
+    if (!terminal || terminal.id !== terminalId) {
+      throw new Error(`当前会话中不存在终端：${terminalId}`);
+    }
+    enforceCommandAuthorization(managed.session.authorizationLevel, command);
+    const timestamp = new Date().toISOString();
+    const record = await this.history.append({
+      sessionId,
+      command: redactCommand(command),
+      startedAt: timestamp,
+      finishedAt: timestamp,
+      stdoutTail: '',
+      stderrTail: '',
+      summary: '用户通过主会话终端执行；命令输出保留在终端回放中。'
+    });
+    terminal.stream.write('\r');
+    return record;
   }
 
   closeTerminal(terminalId: string): void {

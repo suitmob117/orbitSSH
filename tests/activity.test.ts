@@ -1,5 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { takeRecentChronological } from '../src/renderer/src/lib/activity';
+
+test('轨迹记录按时间正序显示，最新项位于底部', () => {
+  assert.deepEqual(takeRecentChronological([1, 2, 3, 4], 3), [2, 3, 4]);
+});
 import type { CommandRecord } from '../src/shared/types';
 import { getCommandActivityState } from '../src/renderer/src/lib/activity';
 

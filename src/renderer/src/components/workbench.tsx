@@ -12,14 +12,11 @@ import {
   FileText,
   FileUp,
   Folder,
-  FolderInput,
   FolderUp,
   History,
   Link2,
   Monitor,
   Moon,
-  PlugZap,
-  Power,
   RefreshCw,
   ScanLine,
   Save,
@@ -43,8 +40,10 @@ import type {
   RemoteFileEntry
 } from '@shared/types';
 import { Button, DangerButton, Input, Label, SecondaryButton, Select } from './ui';
+import { SessionHeader } from './session-header';
 import { cn } from '../lib/utils';
-import { getCommandActivityState } from '../lib/activity';
+import { getCommandActivityState, takeRecentChronological } from '../lib/activity';
+import { TerminalCommandTracker } from '../lib/terminal-command-tracker';
 import {
   formatFileSize,
   getRemoteParent,
@@ -64,18 +63,6 @@ const AUTH_LABELS: Record<AuthMethod, string> = {
 };
 
 const ENABLED_AUTH_METHODS: AuthMethod[] = ['saved_password', 'ssh_agent', 'private_key'];
-
-const AUTH_LEVEL_LABELS: Record<AuthorizationLevel, string> = {
-  ask_every_time: '每次询问',
-  auto_readonly: '自动只读',
-  trusted_session: '信任会话'
-};
-
-const AUTH_LEVEL_TONES: Record<AuthorizationLevel, string> = {
-  ask_every_time: 'authorization-normal',
-  auto_readonly: 'authorization-readonly',
-  trusted_session: 'authorization-trusted'
-};
 
 function healthLabel(health?: ConnectionSession['health']): string {
   if (health === 'connected') return '已连接';
@@ -253,10 +240,12 @@ export function ServerSidebar({
 
 function TerminalPanel({
   session,
-  active
+  active,
+  onCommandRecorded
 }: {
   session: ConnectionSession;
   active: boolean;
+  onCommandRecorded: (record: CommandRecord) => void;
 }): JSX.Element {
   const containerRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<Terminal>();
@@ -303,7 +292,24 @@ function TerminalPanel({
       }
       terminalIdRef.current = terminalId;
       if (replay) terminal.write(replay);
-      terminal.onData((data) => void window.aiSsh.writeTerminal(session.id, terminalId, data));
+      const tracker = new TerminalCommandTracker();
+      let inputQueue = Promise.resolve();
+      terminal.onData((data) => {
+        const actions = tracker.consume(data);
+        inputQueue = inputQueue.then(async () => {
+          for (const action of actions) {
+            if (action.type === 'write') {
+              await window.aiSsh.writeTerminal(session.id, terminalId, action.data);
+            } else {
+              const record = await window.aiSsh.submitTerminalCommand(session.id, terminalId, action.command);
+              onCommandRecorded(record);
+            }
+          }
+        }).catch(async (error: unknown) => {
+          await window.aiSsh.writeTerminal(session.id, terminalId, '\x03').catch(() => undefined);
+          terminal.writeln(`\r\n命令未执行：${error instanceof Error ? error.message : String(error)}`);
+        });
+      });
     }).catch((error: unknown) => {
       terminal.writeln(`\r\n终端打开失败：${error instanceof Error ? error.message : String(error)}`);
     });
@@ -369,62 +375,6 @@ function WorkspaceTabs({ view, onChange }: { view: CenterView; onChange: (value:
   );
 }
 
-function SessionHeader({
-  profile,
-  session,
-  authorizationLevel,
-  codexPaused,
-  busy,
-  onAuthorizationLevelChange,
-  onToggleCodexPause,
-  onHealthCheck,
-  onConnect,
-  onDisconnect,
-  onOpenTransfer
-}: {
-  profile?: ConnectionProfile;
-  session?: ConnectionSession;
-  authorizationLevel: AuthorizationLevel;
-  codexPaused: boolean;
-  busy: boolean;
-  onAuthorizationLevelChange: (value: AuthorizationLevel) => void;
-  onToggleCodexPause: () => void;
-  onHealthCheck: () => void;
-  onConnect: () => void;
-  onDisconnect: () => void;
-  onOpenTransfer: () => void;
-}): JSX.Element {
-  return (
-    <section className="session-header workbench-panel">
-      <div className="session-identity">
-        <div className="server-orb"><Server /></div>
-        <div>
-          <h1>{profile?.name ?? '新建连接'}</h1>
-          <p>{profile ? <><b>{profile.username}</b>@{profile.host} · 端口 {profile.port}</> : '填写服务器信息后保存连接'}</p>
-        </div>
-      </div>
-      <div className="session-controls">
-        <span className={cn('trust-state', session && 'is-trusted')}><i />{session ? '会话已建立' : '等待连接'}</span>
-        <Select className={cn('authorization-select', AUTH_LEVEL_TONES[authorizationLevel])} value={authorizationLevel} onChange={(event) => onAuthorizationLevelChange(event.target.value as AuthorizationLevel)}>
-          {Object.entries(AUTH_LEVEL_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
-        </Select>
-        {session ? (
-          <SecondaryButton className={cn(codexPaused && 'is-codex-paused')} onClick={onToggleCodexPause}>
-            {codexPaused ? '恢复共驾' : '接管 Codex'}
-          </SecondaryButton>
-        ) : null}
-        {session ? <SecondaryButton disabled={busy} onClick={onHealthCheck}><RefreshCw />检查连接</SecondaryButton> : null}
-        <SecondaryButton onClick={onOpenTransfer} disabled={!profile}><FolderInput />文件舱</SecondaryButton>
-        {session ? (
-          <DangerButton onClick={onDisconnect}><Power />关闭</DangerButton>
-        ) : (
-          <Button onClick={onConnect} disabled={!profile || busy}><PlugZap />连接</Button>
-        )}
-      </div>
-    </section>
-  );
-}
-
 function ProfileEditor({
   form,
   busy,
@@ -467,11 +417,11 @@ function SecretInput({ shown, disabled, value, placeholder, onToggle, onChange }
 function HistoryView({ history }: { history: CommandRecord[] }): JSX.Element {
   return (
     <div className="history-view">
-      <div className="editor-heading"><div><strong>执行记录</strong><span>仅显示当前 SSH 会话的真实命令结果。</span></div><FileClock /></div>
+      <div className="editor-heading"><div><strong>执行记录</strong><span>记录当前 SSH 会话执行的命令；交互输出保留在主会话。</span></div><FileClock /></div>
       <div className="history-list">
-        {history.length === 0 ? <div className="content-empty">当前会话还没有命令记录</div> : history.slice().reverse().map((record) => (
+        {history.length === 0 ? <div className="content-empty">当前会话还没有命令记录</div> : history.map((record) => (
           <article key={record.id}>
-            <div><code>{record.command}</code><span className={cn(record.exitCode === 0 && 'is-success')}>退出码 {record.exitCode ?? '未知'}</span></div>
+            <div><code>{record.command}</code><span className={cn(record.exitCode === 0 && 'is-success')}>{record.exitCode === undefined ? '交互终端' : `退出码 ${record.exitCode}`}</span></div>
             <p>{record.summary}</p><time>{formatTime(record.finishedAt ?? record.startedAt)}</time>
           </article>
         ))}
@@ -499,7 +449,8 @@ export function CenterWorkbench({
   onDisconnect,
   onHealthCheck,
   onSave,
-  onOpenTransfer
+  onOpenTransfer,
+  onCommandRecorded
 }: {
   profile?: ConnectionProfile;
   session?: ConnectionSession;
@@ -520,6 +471,7 @@ export function CenterWorkbench({
   onHealthCheck: () => void;
   onSave: () => void;
   onOpenTransfer: () => void;
+  onCommandRecorded: (record: CommandRecord) => void;
 }): JSX.Element {
   return (
     <main className="center-workbench">
@@ -529,7 +481,7 @@ export function CenterWorkbench({
         <WorkspaceTabs view={view} onChange={onViewChange} />
         <div className={cn('terminal-workspace', view !== 'terminal' && 'is-hidden')}>
           {sessions.map((item) => (
-            <TerminalPanel key={item.id} session={item} active={view === 'terminal' && session?.id === item.id} />
+            <TerminalPanel key={item.id} session={item} active={view === 'terminal' && session?.id === item.id} onCommandRecorded={onCommandRecorded} />
           ))}
           {!session ? <EmptyTerminal /> : null}
         </div>
@@ -559,8 +511,8 @@ function ActivityTimeline({
   onApprove: (action: CodrivingAction) => void;
   onReject: (action: CodrivingAction) => void;
 }): JSX.Element {
-  const records = history.slice(-3).reverse();
-  const recentActions = actions.slice(-6).reverse();
+  const records = takeRecentChronological(history, 3);
+  const recentActions = takeRecentChronological(actions, 6);
   return (
     <div className={cn('activity-timeline', (session || recentActions.some((action) => action.status === 'running' || action.status === 'pending_approval')) && 'has-live')}>
       {session ? (

@@ -34,6 +34,8 @@ const api: AiSshApi = {
   openTerminal: (sessionId: string) => ipcRenderer.invoke('terminal:open', sessionId),
   writeTerminal: (sessionId: string, terminalId: string, data: string) =>
     ipcRenderer.invoke('terminal:write', sessionId, terminalId, data),
+  submitTerminalCommand: (sessionId: string, terminalId: string, command: string) =>
+    ipcRenderer.invoke('terminal:submit', sessionId, terminalId, command),
   closeTerminal: (terminalId: string) => ipcRenderer.invoke('terminal:close', terminalId),
   onTerminalData: (callback: (chunk: TerminalChunk) => void) => {
     const listener = (_event: Electron.IpcRendererEvent, chunk: TerminalChunk) => callback(chunk);

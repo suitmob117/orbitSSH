@@ -37,7 +37,17 @@ function createHarness(notifier?: { notifyPendingApproval(): void }) {
       stderr: ''
     }),
     getTerminalSessionId: () => session.id,
-    writeTerminal: (_terminalId: string, data: string) => terminalWrites.push(data)
+    writeTerminal: (_terminalId: string, data: string) => terminalWrites.push(data),
+    submitTerminalCommand: async (_sessionId: string, _terminalId: string, command: string) => ({
+      id: 'interactive-record-1',
+      sessionId: session.id,
+      command,
+      startedAt: '',
+      finishedAt: '',
+      stdoutTail: '',
+      stderrTail: '',
+      summary: '交互终端'
+    })
   });
   const coordinator = new CodrivingCoordinator(sessionManager as never);
   const controller = new RuntimeController({
@@ -134,6 +144,26 @@ test('用户在原始终端输入时自动暂停 Codex 后续操作', async () =
 
   assert.deepEqual(terminalWrites, ['l']);
   assert.equal((submission as { action: { status: string } }).action.status, 'paused');
+});
+
+test('只有桌面客户端可以提交交互终端命令记录', async () => {
+  const { controller } = createHarness();
+
+  const record = await controller.handle(
+    'terminal:submit',
+    { sessionId: 'session-1', terminalId: 'terminal-1', command: 'pwd' },
+    { clientId: 'desktop-1', kind: 'desktop' }
+  );
+  assert.equal((record as { command: string }).command, 'pwd');
+
+  await assert.rejects(
+    controller.handle(
+      'terminal:submit',
+      { sessionId: 'session-1', terminalId: 'terminal-1', command: 'pwd' },
+      { clientId: 'mcp-1', kind: 'mcp' }
+    ),
+    /MCP.*terminal:submit/
+  );
 });
 
 test('MCP 提交的命令始终按 Codex 身份处理，且不能调用批准接口', async () => {

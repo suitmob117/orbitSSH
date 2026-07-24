@@ -610,6 +610,20 @@ test('command secrets are redacted from history without changing remote executio
   assert.equal(result.record.command, 'echo password=[REDACTED]');
 });
 
+test('用户在交互终端提交普通命令后写入脱敏执行记录', async () => {
+  const harness = createHarness('ask_every_time');
+  const session = await harness.manager.openSession('profile-1', harness.authorizationLevel);
+  const terminalId = await harness.manager.openTerminal(session.id);
+
+  harness.manager.writeTerminal(terminalId, 'echo password=hunter2');
+  const record = await harness.manager.submitTerminalCommand(session.id, terminalId, 'echo password=hunter2');
+
+  assert.deepEqual(harness.client.terminalWrites, ['echo password=hunter2', '\r']);
+  assert.equal(record.command, 'echo password=[REDACTED]');
+  assert.equal(record.exitCode, undefined);
+  assert.equal(harness.historyRecords.length, 1);
+});
+
 test('主会话命令栏写入同一个交互终端，保留远端 shell 的目录和提示符状态', async () => {
   const harness = createHarness('ask_every_time');
   const session = await harness.manager.openSession('profile-1', harness.authorizationLevel);

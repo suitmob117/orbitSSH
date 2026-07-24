@@ -32,6 +32,11 @@ const commandRequestSchema = z.object({
   actor: z.unknown().optional()
 }).strict();
 const terminalWriteSchema = z.object({ sessionId: idSchema, terminalId: idSchema, data: z.string() }).strict();
+const terminalSubmitSchema = z.object({
+  sessionId: idSchema,
+  terminalId: idSchema,
+  command: z.string().trim().min(1).max(32_768)
+}).strict();
 const actionListSchema = z.object({ sessionId: idSchema, afterSequence: z.number().int().min(0).optional() }).strict();
 const exitPolicySchema = z.object({
   policy: z.enum(['keep_codex', 'finish_then_exit', 'close_all'])
@@ -231,6 +236,17 @@ export class RuntimeController {
         }
         this.services.sessionManager.writeTerminal(input.terminalId, input.data);
         return { ok: true };
+      }
+      case 'terminal:submit': {
+        const input = terminalSubmitSchema.parse(params);
+        if (this.services.sessionManager.getTerminalSessionId(input.terminalId) !== input.sessionId) {
+          throw new Error('终端与连接会话不匹配');
+        }
+        return this.services.sessionManager.submitTerminalCommand(
+          input.sessionId,
+          input.terminalId,
+          input.command
+        );
       }
       case 'terminal:close': {
         const { terminalId } = z.object({ terminalId: idSchema }).strict().parse(params);

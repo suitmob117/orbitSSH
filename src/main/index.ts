@@ -4,6 +4,7 @@ import { readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import type {
   AppTheme,
+  CommandRecord,
   CommandResult,
   CodrivingAction,
   CodrivingApproval,
@@ -243,6 +244,9 @@ function registerIpc(client: RuntimeRpcClient): void {
   );
   ipcMain.handle('terminal:write', (_event, sessionId: string, terminalId: string, data: string) =>
     client.call('terminal:write', { sessionId, terminalId, data })
+  );
+  ipcMain.handle('terminal:submit', (_event, sessionId: string, terminalId: string, command: string) =>
+    client.call<CommandRecord>('terminal:submit', { sessionId, terminalId, command })
   );
   ipcMain.handle('terminal:close', (_event, terminalId: string) => client.call('terminal:close', { terminalId }));
   ipcMain.handle('codriving:events', (_event, sessionId: string, afterSequence?: number) =>

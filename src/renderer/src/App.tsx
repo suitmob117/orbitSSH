@@ -20,6 +20,7 @@ import {
 } from './components/workbench';
 import { parseThemePreference, resolveTheme, type ThemePreference } from './lib/theme';
 import { joinRemotePath } from './lib/remote-path';
+import { getMessageAutoDismissMs } from './lib/message-lifecycle';
 
 const DEFAULT_FORM: ConnectionProfileInput = {
   name: '',
@@ -125,6 +126,13 @@ export function App(): JSX.Element {
   useEffect(() => {
     void refresh();
   }, []);
+
+  useEffect(() => {
+    const delay = getMessageAutoDismissMs(message);
+    if (delay === undefined) return;
+    const timer = window.setTimeout(() => setMessage(undefined), delay);
+    return () => window.clearTimeout(timer);
+  }, [message]);
 
   useEffect(() => {
     if (!activeSession) {
@@ -464,6 +472,10 @@ export function App(): JSX.Element {
           onHealthCheck={() => void checkHealth()}
           onSave={() => void saveProfile()}
           onOpenTransfer={() => setInspectorView('transfer')}
+          onCommandRecorded={(record) => setHistory((items) => [
+            ...items.filter((item) => item.id !== record.id),
+            record
+          ])}
         />
         <ActivityRail
           profile={selectedProfile}
