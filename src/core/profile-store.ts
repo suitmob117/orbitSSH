@@ -37,6 +37,19 @@ export class ProfileStore {
   }
 
   async save(input: ConnectionProfileInput, id?: string): Promise<ConnectionProfile> {
+    return this.saveWithOptions(input, id, false);
+  }
+
+  /** 导入时允许先建立不含密码的配置，用户再次编辑保存时仍必须补录密码。 */
+  async importProfile(input: ConnectionProfileInput): Promise<ConnectionProfile> {
+    return this.saveWithOptions(input, undefined, true);
+  }
+
+  private async saveWithOptions(
+    input: ConnectionProfileInput,
+    id: string | undefined,
+    allowMissingSavedPassword: boolean
+  ): Promise<ConnectionProfile> {
     const parsed = profileInputSchema.parse(input);
     const profiles = await this.list();
     const now = new Date().toISOString();
@@ -61,7 +74,7 @@ export class ProfileStore {
       if (parsed.authMethod === 'saved_password') {
         if (parsed.password) {
           await this.credentialVault.setSecret(passwordCredentialId, parsed.password);
-        } else if (!existing?.credentialId) {
+        } else if (!existing?.credentialId && !allowMissingSavedPassword) {
           throw new Error('保存密码认证方式需要输入密码');
         }
       } else {
@@ -82,7 +95,9 @@ export class ProfileStore {
         username: parsed.username,
         authMethod: parsed.authMethod,
         privateKeyPath: parsed.privateKeyPath?.trim() || undefined,
-        credentialId: parsed.authMethod === 'saved_password' ? passwordCredentialId : undefined,
+        credentialId: parsed.authMethod === 'saved_password' && (parsed.password || existing?.credentialId)
+          ? passwordCredentialId
+          : undefined,
         privateKeyPassphraseCredentialId: parsed.rememberPrivateKeyPassphrase
           ? passphraseCredentialId
           : undefined,

@@ -21,6 +21,8 @@ export interface ResolvedFileTransferPaths {
 
 export interface FileBoundaryPort {
   resolve(request: FileBoundaryRequest): Promise<ResolvedFileTransferPaths>;
+  resolveRemotePath(remotePath: string): string;
+  resolveRemoteBrowsePath(remotePath: string): string;
 }
 
 /**
@@ -87,19 +89,27 @@ export class FileBoundary implements FileBoundaryPort {
     }
   }
 
-  private resolveRemotePath(remotePath: string): string {
+  resolveRemotePath(remotePath: string): string {
     if (!this.options.remoteRoots.length) {
       throw new Error('未配置远程文件传输允许目录');
     }
-    if (!remotePath.startsWith('/') || remotePath.split('/').includes('..')) {
-      throw new Error('远程文件路径不在允许目录内');
-    }
-    const normalized = path.posix.normalize(remotePath);
+    const normalized = this.normalizeRemotePath(remotePath, '远程文件路径不在允许目录内');
     const allowed = this.options.remoteRoots.some((root) => this.isRemoteContained(root, normalized));
     if (!allowed) {
       throw new Error('远程文件路径不在允许目录内');
     }
     return normalized;
+  }
+
+  resolveRemoteBrowsePath(remotePath: string): string {
+    return this.normalizeRemotePath(remotePath, '远程浏览路径无效');
+  }
+
+  private normalizeRemotePath(remotePath: string, message: string): string {
+    if (!remotePath.startsWith('/') || remotePath.split('/').includes('..') || remotePath.includes('\0')) {
+      throw new Error(message);
+    }
+    return path.posix.normalize(remotePath);
   }
 
   private isRemoteContained(root: string, candidate: string): boolean {

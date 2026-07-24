@@ -18,7 +18,11 @@ import type {
   TrustedHostKey
 } from '../src/shared/types';
 
-type FakeChannel = EventEmitter & { stderr: EventEmitter };
+type FakeChannel = EventEmitter & {
+  stderr: EventEmitter;
+  write(data: string): void;
+  end(): void;
+};
 
 class FakeClient extends EventEmitter {
   connectCalls = 0;
@@ -28,8 +32,20 @@ class FakeClient extends EventEmitter {
   sftpError?: Error;
   fastPutError?: Error;
   fastGetError?: Error;
+  readdirError?: Error;
+  readdirEntries: Array<{
+    filename: string;
+    attrs: {
+      size: number;
+      mtime: number;
+      isDirectory(): boolean;
+      isFile(): boolean;
+      isSymbolicLink(): boolean;
+    };
+  }> = [];
   readonly operations: string[] = [];
   readonly executedCommands: string[] = [];
+  readonly terminalWrites: string[] = [];
   presentedHostKey?: Buffer;
   synchronousHostVerification = false;
   deferHostVerificationError = false;
@@ -75,7 +91,11 @@ class FakeClient extends EventEmitter {
     this.execCalls += 1;
     this.operations.push('exec');
     this.executedCommands.push(command);
-    const stream = Object.assign(new EventEmitter(), { stderr: new EventEmitter() });
+    const stream = Object.assign(new EventEmitter(), {
+      stderr: new EventEmitter(),
+      write() {},
+      end() {}
+    });
     callback(this.execError, stream);
     if (this.execError) {
       return;
@@ -86,6 +106,23 @@ class FakeClient extends EventEmitter {
     });
   }
 
+  shell(
+    _options: unknown,
+    callback: (error: Error | undefined, stream: FakeChannel) => void
+  ): void {
+    const terminalWrites = this.terminalWrites;
+    const stream = Object.assign(new EventEmitter(), {
+      stderr: new EventEmitter(),
+      write(data: string) {
+        terminalWrites.push(data);
+      },
+      end() {
+        stream.emit('close');
+      }
+    }) as FakeChannel;
+    callback(undefined, stream);
+  }
+
   sftp(
     callback: (
       error: Error | undefined,
@@ -93,6 +130,10 @@ class FakeClient extends EventEmitter {
         end(): void;
         fastPut(_localPath: string, _remotePath: string, done: (error?: Error) => void): void;
         fastGet(_remotePath: string, _localPath: string, done: (error?: Error) => void): void;
+        readdir(
+          _remotePath: string,
+          done: (error: Error | undefined, entries: FakeClient['readdirEntries']) => void
+        ): void;
       }
     ) => void
   ): void {
@@ -100,6 +141,8 @@ class FakeClient extends EventEmitter {
     this.operations.push('sftp');
     const fastPutError = this.fastPutError;
     const fastGetError = this.fastGetError;
+    const readdirError = this.readdirError;
+    const readdirEntries = this.readdirEntries;
     const complete = (done: (error?: Error) => void, error?: Error) =>
       queueMicrotask(() => done(error));
     callback(this.sftpError, {
@@ -109,6 +152,9 @@ class FakeClient extends EventEmitter {
       },
       fastGet(_remotePath, _localPath, done) {
         complete(done, fastGetError);
+      },
+      readdir(_remotePath, done) {
+        queueMicrotask(() => done(readdirError, readdirEntries));
       }
     });
   }
@@ -143,7 +189,11 @@ class MemoryHostKeyStore implements HostKeyStorePort {
 function createHarness(
   authorizationLevel: AuthorizationLevel,
   profileOverrides: Partial<ConnectionProfile> = {},
-  fileBoundary: FileBoundaryPort = { resolve: async ({ localPath, remotePath }) => ({ localPath, remotePath }) }
+  fileBoundary: FileBoundaryPort = {
+    resolve: async ({ localPath, remotePath }) => ({ localPath, remotePath }),
+    resolveRemotePath: (remotePath) => remotePath,
+    resolveRemoteBrowsePath: (remotePath) => remotePath
+  }
 ) {
   const client = new FakeClient();
   const historyRecords: Omit<CommandRecord, 'id'>[] = [];
@@ -426,7 +476,9 @@ test('路径检查失败时在打开 SFTP 前拒绝传输', async () => {
   const fileBoundary: FileBoundaryPort = {
     resolve: async () => {
       throw new Error('本地文件路径不在允许目录内');
-    }
+    },
+    resolveRemotePath: (remotePath) => remotePath,
+    resolveRemoteBrowsePath: (remotePath) => remotePath
   };
   const harness = createHarness('ask_every_time', {}, fileBoundary);
   const session = await harness.manager.openSession('profile-1', harness.authorizationLevel);
@@ -441,6 +493,83 @@ test('路径检查失败时在打开 SFTP 前拒绝传输', async () => {
     /允许目录/
   );
   assert.equal(harness.client.sftpCalls, 0);
+});
+
+test('远程目录读取经过边界检查并按目录优先排序', async () => {
+  const resolvedPaths: string[] = [];
+  const fileBoundary: FileBoundaryPort = {
+    resolve: async ({ localPath, remotePath }) => ({ localPath, remotePath }),
+    resolveRemotePath: (remotePath) => {
+      resolvedPaths.push(remotePath);
+      return remotePath.replace(/\/$/, '');
+    },
+    resolveRemoteBrowsePath: (remotePath) => {
+      resolvedPaths.push(remotePath);
+      return remotePath.replace(/\/$/, '');
+    }
+  };
+  const harness = createHarness('ask_every_time', {}, fileBoundary);
+  const session = await harness.manager.openSession('profile-1', harness.authorizationLevel);
+  const attrs = (type: 'directory' | 'file' | 'symlink', size = 0) => ({
+    size,
+    mtime: 1_700_000_000,
+    isDirectory: () => type === 'directory',
+    isFile: () => type === 'file',
+    isSymbolicLink: () => type === 'symlink'
+  });
+  harness.client.readdirEntries = [
+    { filename: 'zeta.txt', attrs: attrs('file', 128) },
+    { filename: 'packages', attrs: attrs('directory') },
+    { filename: 'current', attrs: attrs('symlink') },
+    { filename: '..', attrs: attrs('directory') }
+  ];
+
+  const entries = await harness.manager.listRemoteDirectory(session.id, '/srv/app/');
+
+  assert.deepEqual(entries.map((entry) => [entry.name, entry.type]), [
+    ['packages', 'directory'],
+    ['current', 'symlink'],
+    ['zeta.txt', 'file']
+  ]);
+  assert.deepEqual(resolvedPaths, [
+    '/srv/app/',
+    '/srv/app/zeta.txt',
+    '/srv/app/packages',
+    '/srv/app/current'
+  ]);
+});
+
+test('非法远程浏览路径在打开 SFTP 前被拒绝', async () => {
+  const fileBoundary: FileBoundaryPort = {
+    resolve: async ({ localPath, remotePath }) => ({ localPath, remotePath }),
+    resolveRemotePath: (remotePath) => remotePath,
+    resolveRemoteBrowsePath: () => {
+      throw new Error('远程浏览路径无效');
+    }
+  };
+  const harness = createHarness('ask_every_time', {}, fileBoundary);
+  const session = await harness.manager.openSession('profile-1', harness.authorizationLevel);
+
+  await assert.rejects(
+    harness.manager.listRemoteDirectory(session.id, '/etc/../root'),
+    /浏览路径/
+  );
+  assert.equal(harness.client.sftpCalls, 0);
+});
+
+test('远程目录读取错误会脱敏', async () => {
+  const harness = createHarness('ask_every_time');
+  const session = await harness.manager.openSession('profile-1', harness.authorizationLevel);
+  harness.client.readdirError = new Error('token=directory-secret');
+
+  await assert.rejects(
+    harness.manager.listRemoteDirectory(session.id, '/srv/app'),
+    (error: Error) => {
+      assert.equal(error.message.includes('directory-secret'), false);
+      assert.equal(error.message.includes('[REDACTED]'), true);
+      return true;
+    }
+  );
 });
 
 test('auto readonly allows readonly commands and downloads through remote interfaces', async () => {
@@ -470,6 +599,31 @@ test('command secrets are redacted from history without changing remote executio
   assert.deepEqual(harness.client.executedCommands, [command]);
   assert.equal(harness.historyRecords[0]?.command, 'echo password=[REDACTED]');
   assert.equal(result.record.command, 'echo password=[REDACTED]');
+});
+
+test('主会话命令栏写入同一个交互终端，保留远端 shell 的目录和提示符状态', async () => {
+  const harness = createHarness('ask_every_time');
+  const session = await harness.manager.openSession('profile-1', harness.authorizationLevel);
+  const terminalId = await harness.manager.openTerminal(session.id);
+
+  harness.manager.runTerminalCommand(session.id, terminalId, 'cd /opt');
+  harness.manager.runTerminalCommand(session.id, terminalId, 'ls');
+
+  assert.deepEqual(harness.client.terminalWrites, ['cd /opt\r', 'ls\r']);
+  assert.equal(harness.client.execCalls, 0);
+  assert.equal(harness.historyRecords.length, 0);
+});
+
+test('主会话命令栏仍在写入交互终端前执行授权检查', async () => {
+  const harness = createHarness('auto_readonly');
+  const session = await harness.manager.openSession('profile-1', harness.authorizationLevel);
+  const terminalId = await harness.manager.openTerminal(session.id);
+
+  assert.throws(
+    () => harness.manager.runTerminalCommand(session.id, terminalId, 'mkdir /tmp/demo'),
+    /当前会话为“只读自动”/
+  );
+  assert.deepEqual(harness.client.terminalWrites, []);
 });
 
 test('sensitive headers reach SSH unchanged but fail closed in command history', async () => {

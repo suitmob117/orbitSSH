@@ -1,6 +1,7 @@
-import { contextBridge, ipcRenderer } from 'electron';
+import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import type {
   AiSshApi,
+  AppTheme,
   AuthorizationLevel,
   ConnectionProfileInput,
   FileTransferRequest,
@@ -8,9 +9,12 @@ import type {
 } from '@shared/types';
 
 const api: AiSshApi = {
+  setTitleBarTheme: (theme: AppTheme) => ipcRenderer.invoke('appearance:title-bar-theme', theme),
   listProfiles: () => ipcRenderer.invoke('profiles:list'),
   saveProfile: (input: ConnectionProfileInput, id?: string) => ipcRenderer.invoke('profiles:save', input, id),
   deleteProfile: (id: string) => ipcRenderer.invoke('profiles:delete', id),
+  exportProfiles: () => ipcRenderer.invoke('profiles:export'),
+  importProfiles: () => ipcRenderer.invoke('profiles:import'),
   openSession: (profileId: string, authorizationLevel: AuthorizationLevel) =>
     ipcRenderer.invoke('sessions:open', profileId, authorizationLevel),
   listHostKeyTrustChallenges: () => ipcRenderer.invoke('host-keys:pending'),
@@ -21,7 +25,15 @@ const api: AiSshApi = {
   runCommand: (sessionId: string, command: string) => ipcRenderer.invoke('commands:run', sessionId, command),
   listHistory: (sessionId?: string) => ipcRenderer.invoke('history:list', sessionId),
   transferFile: (request: FileTransferRequest) => ipcRenderer.invoke('files:transfer', request),
+  listRemoteDirectory: (sessionId: string, remotePath: string) =>
+    ipcRenderer.invoke('files:list-remote', sessionId, remotePath),
+  pickLocalFiles: (defaultPath?: string) => ipcRenderer.invoke('files:pick-local', defaultPath),
+  pickDownloadTarget: (defaultPath: string | undefined, fileName: string) =>
+    ipcRenderer.invoke('files:pick-download-target', defaultPath, fileName),
+  getPathForDroppedFile: (file: File) => webUtils.getPathForFile(file),
   openTerminal: (sessionId: string) => ipcRenderer.invoke('terminal:open', sessionId),
+  runTerminalCommand: (sessionId: string, terminalId: string, command: string) =>
+    ipcRenderer.invoke('terminal:command', sessionId, terminalId, command),
   writeTerminal: (terminalId: string, data: string) => ipcRenderer.invoke('terminal:write', terminalId, data),
   closeTerminal: (terminalId: string) => ipcRenderer.invoke('terminal:close', terminalId),
   onTerminalData: (callback: (chunk: TerminalChunk) => void) => {

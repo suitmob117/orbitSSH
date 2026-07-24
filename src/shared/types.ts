@@ -2,7 +2,57 @@ export type AuthMethod = 'saved_password' | 'password_prompt' | 'ssh_agent' | 'p
 
 export type AuthorizationLevel = 'ask_every_time' | 'auto_readonly' | 'trusted_session';
 
+export type CodrivingActor = 'user' | 'codex' | 'system';
+export type CodrivingActionStatus =
+  | 'pending_approval'
+  | 'running'
+  | 'completed'
+  | 'failed'
+  | 'rejected'
+  | 'expired'
+  | 'paused';
+export type CodrivingRisk = 'readonly' | 'write' | 'high';
+
+export interface CodrivingAction {
+  id: string;
+  sequence: number;
+  digest: string;
+  sessionId: string;
+  actor: CodrivingActor;
+  kind: 'command' | 'file_transfer' | 'control';
+  status: CodrivingActionStatus;
+  risk: CodrivingRisk;
+  summary: string;
+  reason: string;
+  approvalExpiresAt?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CodrivingCommandSubmission {
+  action: CodrivingAction;
+  result?: CommandResult;
+}
+
+export interface CodrivingFileTransferSubmission {
+  action: CodrivingAction;
+  result?: FileTransferResult;
+}
+
+export interface CodrivingApproval {
+  actionId: string;
+  digest: string;
+}
+
+export interface SessionAuthorizationChange {
+  sessionId: string;
+  authorizationLevel: AuthorizationLevel;
+  trustedUntil?: string;
+}
+
 export type SessionHealth = 'connected' | 'degraded' | 'disconnected';
+
+export type AppTheme = 'light' | 'dark' | 'green';
 
 export interface ConnectionProfile {
   id: string;
@@ -110,6 +160,64 @@ export interface FileTransferResult {
   finishedAt: string;
 }
 
+export type RemoteFileType = 'directory' | 'file' | 'symlink' | 'other';
+
+export interface RemoteFileEntry {
+  name: string;
+  path: string;
+  type: RemoteFileType;
+  size: number;
+  modifiedAt?: string;
+}
+
+export interface LocalFileSelection {
+  name: string;
+  path: string;
+}
+
+export interface PortableProfileCredentials {
+  password?: string;
+  privateKeyFileName?: string;
+  privateKeyContent?: string;
+  privateKeyPassphrase?: string;
+}
+
+export interface PortableConnectionProfile {
+  name: string;
+  host: string;
+  port: number;
+  username: string;
+  authMethod: AuthMethod;
+  privateKeyPath?: string;
+  connectTimeoutMs: number;
+  keepaliveIntervalMs: number;
+  jumpHost?: string;
+  localTransferRoot?: string;
+  remoteTransferRoots?: string[];
+  credentials?: PortableProfileCredentials;
+}
+
+export interface ProfileExportDocument {
+  format: 'orbitssh-connections';
+  version: 1;
+  exportedAt: string;
+  includesSecrets: boolean;
+  profiles: PortableConnectionProfile[];
+}
+
+export interface ProfileExportResult {
+  filePath: string;
+  count: number;
+  includesSecrets: boolean;
+}
+
+export interface ProfileImportResult {
+  filePath: string;
+  importedCount: number;
+  skippedCount: number;
+  includedSecrets: boolean;
+}
+
 export interface TerminalChunk {
   sessionId: string;
   terminalId: string;
@@ -123,9 +231,12 @@ export interface AppStateSnapshot {
 }
 
 export interface AiSshApi {
+  setTitleBarTheme(theme: AppTheme): Promise<void>;
   listProfiles(): Promise<ConnectionProfile[]>;
   saveProfile(input: ConnectionProfileInput, id?: string): Promise<ConnectionProfile>;
   deleteProfile(id: string): Promise<void>;
+  exportProfiles(): Promise<ProfileExportResult | undefined>;
+  importProfiles(): Promise<ProfileImportResult | undefined>;
   openSession(profileId: string, authorizationLevel: AuthorizationLevel): Promise<ConnectionSession>;
   listHostKeyTrustChallenges(): Promise<HostKeyTrustChallenge[]>;
   confirmHostKeyTrust(confirmation: HostKeyTrustConfirmation): Promise<void>;
@@ -135,7 +246,12 @@ export interface AiSshApi {
   runCommand(sessionId: string, command: string): Promise<CommandResult>;
   listHistory(sessionId?: string): Promise<CommandRecord[]>;
   transferFile(request: FileTransferRequest): Promise<FileTransferResult>;
+  listRemoteDirectory(sessionId: string, remotePath: string): Promise<RemoteFileEntry[]>;
+  pickLocalFiles(defaultPath?: string): Promise<LocalFileSelection[]>;
+  pickDownloadTarget(defaultPath: string | undefined, fileName: string): Promise<string | undefined>;
+  getPathForDroppedFile(file: File): string;
   openTerminal(sessionId: string): Promise<string>;
+  runTerminalCommand(sessionId: string, terminalId: string, command: string): Promise<void>;
   writeTerminal(terminalId: string, data: string): Promise<void>;
   closeTerminal(terminalId: string): Promise<void>;
   onTerminalData(callback: (chunk: TerminalChunk) => void): () => void;

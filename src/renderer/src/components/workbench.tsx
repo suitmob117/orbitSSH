@@ -4,20 +4,24 @@ import { Terminal } from '@xterm/xterm';
 import {
   Activity,
   CheckCircle2,
-  ChevronRight,
   Download,
   Eye,
   EyeOff,
   FileClock,
+  FileDown,
+  FileText,
+  FileUp,
+  Folder,
   FolderInput,
-  HardDrive,
+  FolderUp,
   History,
+  Link2,
   Monitor,
   Moon,
-  Play,
   PlugZap,
   Power,
   RefreshCw,
+  ScanLine,
   Save,
   Search,
   Server,
@@ -34,15 +38,23 @@ import type {
   ConnectionProfile,
   ConnectionProfileInput,
   ConnectionSession,
-  FileTransferRequest,
-  HostKeyTrustChallenge
+  HostKeyTrustChallenge,
+  LocalFileSelection,
+  RemoteFileEntry
 } from '@shared/types';
 import { Button, DangerButton, Input, Label, SecondaryButton, Select } from './ui';
 import { cn } from '../lib/utils';
+import { getCommandActivityState } from '../lib/activity';
+import {
+  formatFileSize,
+  getRemoteParent,
+  isRemotePathWithinRoots,
+  normalizeRemotePath
+} from '../lib/remote-path';
+import type { ThemePreference } from '../lib/theme';
 
 export type CenterView = 'terminal' | 'config' | 'history';
 export type InspectorView = 'activity' | 'transfer';
-type ThemePreference = 'system' | 'light' | 'dark';
 
 const AUTH_LABELS: Record<AuthMethod, string> = {
   saved_password: '保存密码',
@@ -59,6 +71,12 @@ const AUTH_LEVEL_LABELS: Record<AuthorizationLevel, string> = {
   trusted_session: '信任会话'
 };
 
+const AUTH_LEVEL_TONES: Record<AuthorizationLevel, string> = {
+  ask_every_time: 'authorization-normal',
+  auto_readonly: 'authorization-readonly',
+  trusted_session: 'authorization-trusted'
+};
+
 function healthLabel(health?: ConnectionSession['health']): string {
   if (health === 'connected') return '已连接';
   if (health === 'degraded') return '连接异常';
@@ -72,6 +90,16 @@ function formatTime(value?: string): string {
     hour: '2-digit',
     minute: '2-digit',
     second: '2-digit'
+  }).format(new Date(value));
+}
+
+function formatFileTime(value?: string): string {
+  if (!value) return '—';
+  return new Intl.DateTimeFormat('zh-CN', {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit'
   }).format(new Date(value));
 }
 
@@ -130,6 +158,9 @@ export function AppTopbar({
         <ThemeButton active={themePreference === 'dark'} label="深色主题" onClick={() => onThemeChange('dark')}>
           <Moon />
         </ThemeButton>
+        <ThemeButton active={themePreference === 'green'} label="复古绿屏主题" onClick={() => onThemeChange('green')}>
+          <ScanLine />
+        </ThemeButton>
       </div>
     </header>
   );
@@ -139,14 +170,20 @@ export function ServerSidebar({
   profiles,
   sessions,
   selectedProfileId,
+  busy,
   onCreate,
-  onSelect
+  onSelect,
+  onImport,
+  onExport
 }: {
   profiles: ConnectionProfile[];
   sessions: ConnectionSession[];
   selectedProfileId?: string;
+  busy: boolean;
   onCreate: () => void;
   onSelect: (profile: ConnectionProfile) => void;
+  onImport: () => void;
+  onExport: () => void;
 }): JSX.Element {
   const [query, setQuery] = useState('');
   const filteredProfiles = useMemo(() => {
@@ -164,7 +201,11 @@ export function ServerSidebar({
     <aside className="server-sidebar workbench-panel">
       <div className="server-sidebar-head">
         <div><span>NETWORK ATLAS</span><strong>服务器星图</strong></div>
-        <button type="button" onClick={onCreate} aria-label="新建连接" title="新建连接">+</button>
+        <div className="profile-actions">
+          <button type="button" disabled={busy} onClick={onImport} aria-label="导入服务器配置" title="导入服务器配置"><FileDown /></button>
+          <button type="button" disabled={busy || profiles.length === 0} onClick={onExport} aria-label="导出服务器配置" title="导出服务器配置"><FileUp /></button>
+          <button type="button" disabled={busy} onClick={onCreate} aria-label="新建连接" title="新建连接">+</button>
+        </div>
       </div>
       <label className="server-search">
         <Search />
@@ -184,7 +225,12 @@ export function ServerSidebar({
             <button
               type="button"
               key={profile.id}
-              className={cn('server-row', selectedProfileId === profile.id && 'is-selected')}
+              className={cn(
+                'server-row',
+                selectedProfileId === profile.id && 'is-selected',
+                session && 'is-connected',
+                session?.health === 'degraded' && 'is-degraded'
+              )}
               onClick={() => onSelect(profile)}
             >
               <i className={cn('server-node', session?.health === 'connected' && 'is-online', session?.health === 'degraded' && 'is-warning')} />
@@ -198,7 +244,7 @@ export function ServerSidebar({
         {filteredProfiles.length === 0 ? <div className="server-empty">没有匹配的服务器</div> : null}
       </div>
       <div className="server-sidebar-foot">
-        <div><strong>Codex 协作通道</strong><span className="channel-switch" /></div>
+        <div><strong>Codex 协作通道</strong><span className="channel-switch is-on" role="status" aria-label="Codex 协作通道已开启" title="协作通道已开启" /></div>
         <p><i />按需运行 · 数据保存在本机</p>
       </div>
     </aside>
@@ -207,19 +253,24 @@ export function ServerSidebar({
 
 function TerminalPanel({
   session,
-  externalOutput
+  active
 }: {
   session: ConnectionSession;
-  externalOutput: string;
+  active: boolean;
 }): JSX.Element {
   const containerRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<Terminal>();
+  const fitAddonRef = useRef<FitAddon>();
   const terminalIdRef = useRef<string>();
-  const lastExternalOutputRef = useRef('');
 
-  const terminalTheme = () => document.documentElement.classList.contains('dark')
-    ? { background: '#061014', foreground: '#b9d2cf', cursor: '#62eee0', selectionBackground: '#24514f' }
-    : { background: '#f5fbfa', foreground: '#244947', cursor: '#0b9e95', selectionBackground: '#b7e9e3' };
+  const terminalTheme = () => {
+    if (document.documentElement.classList.contains('green')) {
+      return { background: '#020702', foreground: '#91ae86', cursor: '#b5d29f', selectionBackground: '#294029' };
+    }
+    return document.documentElement.classList.contains('dark')
+      ? { background: '#061014', foreground: '#b9d2cf', cursor: '#62eee0', selectionBackground: '#24514f' }
+      : { background: '#f5fbfa', foreground: '#244947', cursor: '#0b9e95', selectionBackground: '#b7e9e3' };
+  };
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -227,11 +278,14 @@ function TerminalPanel({
       cursorBlink: true,
       convertEol: true,
       fontFamily: '"Cascadia Code", "Cascadia Mono", Consolas, monospace',
-      fontSize: 12,
+      fontSize: 16,
+      fontWeight: 500,
+      fontWeightBold: 700,
       lineHeight: 1.55,
       theme: terminalTheme()
     });
     const fitAddon = new FitAddon();
+    fitAddonRef.current = fitAddon;
     terminal.loadAddon(fitAddon);
     terminal.open(containerRef.current);
     fitAddon.fit();
@@ -260,9 +314,19 @@ function TerminalPanel({
       if (terminalIdRef.current) void window.aiSsh.closeTerminal(terminalIdRef.current);
       terminal.dispose();
       terminalRef.current = undefined;
+      fitAddonRef.current = undefined;
       terminalIdRef.current = undefined;
     };
   }, [session.id]);
+
+  useEffect(() => {
+    if (!active) return;
+    const frame = window.requestAnimationFrame(() => {
+      fitAddonRef.current?.fit();
+      terminalRef.current?.focus();
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [active]);
 
   useEffect(() => {
     const observer = new MutationObserver(() => {
@@ -272,13 +336,7 @@ function TerminalPanel({
     return () => observer.disconnect();
   }, []);
 
-  useEffect(() => {
-    if (!externalOutput || externalOutput === lastExternalOutputRef.current) return;
-    lastExternalOutputRef.current = externalOutput;
-    terminalRef.current?.writeln(`\r\n\x1b[38;2;138;242;194m${externalOutput.replace(/\n/g, '\r\n')}\x1b[0m`);
-  }, [externalOutput]);
-
-  return <div ref={containerRef} className="terminal-canvas" />;
+  return <div ref={containerRef} className={cn('terminal-canvas', !active && 'is-hidden')} />;
 }
 
 function EmptyTerminal(): JSX.Element {
@@ -339,7 +397,7 @@ function SessionHeader({
       </div>
       <div className="session-controls">
         <span className={cn('trust-state', session && 'is-trusted')}><i />{session ? '会话已建立' : '等待连接'}</span>
-        <Select value={authorizationLevel} onChange={(event) => onAuthorizationLevelChange(event.target.value as AuthorizationLevel)}>
+        <Select className={cn('authorization-select', AUTH_LEVEL_TONES[authorizationLevel])} value={authorizationLevel} onChange={(event) => onAuthorizationLevelChange(event.target.value as AuthorizationLevel)}>
           {Object.entries(AUTH_LEVEL_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
         </Select>
         <SecondaryButton onClick={onOpenTransfer} disabled={!profile}><FolderInput />文件舱</SecondaryButton>
@@ -350,39 +408,6 @@ function SessionHeader({
         )}
       </div>
     </section>
-  );
-}
-
-function CommandBar({
-  command,
-  disabled,
-  busy,
-  onCommandChange,
-  onRun
-}: {
-  command: string;
-  disabled: boolean;
-  busy: boolean;
-  onCommandChange: (value: string) => void;
-  onRun: () => void;
-}): JSX.Element {
-  return (
-    <div className="command-bar">
-      <span>›</span>
-      <input
-        value={command}
-        onChange={(event) => onCommandChange(event.target.value)}
-        onKeyDown={(event) => {
-          if (event.key === 'Enter' && !event.shiftKey && !disabled && !busy) {
-            event.preventDefault();
-            onRun();
-          }
-        }}
-        disabled={disabled}
-        placeholder="输入要在当前会话执行的命令"
-      />
-      <button type="button" onClick={onRun} disabled={disabled || busy} aria-label="执行命令"><Play /></button>
-    </div>
   );
 }
 
@@ -444,43 +469,37 @@ function HistoryView({ history }: { history: CommandRecord[] }): JSX.Element {
 export function CenterWorkbench({
   profile,
   session,
+  sessions,
   form,
   authorizationLevel,
   history,
   view,
-  command,
-  commandOutput,
   busy,
   message,
   onViewChange,
   onFormChange,
   onAuthorizationLevelChange,
-  onCommandChange,
   onConnect,
   onDisconnect,
   onHealthCheck,
-  onRunCommand,
   onSave,
   onOpenTransfer
 }: {
   profile?: ConnectionProfile;
   session?: ConnectionSession;
+  sessions: ConnectionSession[];
   form: ConnectionProfileInput;
   authorizationLevel: AuthorizationLevel;
   history: CommandRecord[];
   view: CenterView;
-  command: string;
-  commandOutput: string;
   busy: boolean;
   message?: string;
   onViewChange: (value: CenterView) => void;
   onFormChange: (form: ConnectionProfileInput) => void;
   onAuthorizationLevelChange: (value: AuthorizationLevel) => void;
-  onCommandChange: (value: string) => void;
   onConnect: () => void;
   onDisconnect: () => void;
   onHealthCheck: () => void;
-  onRunCommand: () => void;
   onSave: () => void;
   onOpenTransfer: () => void;
 }): JSX.Element {
@@ -490,18 +509,18 @@ export function CenterWorkbench({
       {message ? <div className="workbench-toast">{message}</div> : null}
       <section className="workspace-surface workbench-panel">
         <WorkspaceTabs view={view} onChange={onViewChange} />
-        {view === 'terminal' ? (
-          <div className="terminal-workspace">
-            {session ? <TerminalPanel session={session} externalOutput={commandOutput} /> : <EmptyTerminal />}
-            <CommandBar command={command} busy={busy} disabled={!session} onCommandChange={onCommandChange} onRun={onRunCommand} />
-          </div>
-        ) : null}
+        <div className={cn('terminal-workspace', view !== 'terminal' && 'is-hidden')}>
+          {sessions.map((item) => (
+            <TerminalPanel key={item.id} session={item} active={view === 'terminal' && session?.id === item.id} />
+          ))}
+          {!session ? <EmptyTerminal /> : null}
+        </div>
         {view === 'config' ? <ProfileEditor form={form} busy={busy} onChange={onFormChange} onSave={onSave} /> : null}
         {view === 'history' ? <HistoryView history={history} /> : null}
       </section>
       <section className="session-strip">
         <div className="workbench-panel"><span>会话状态</span><strong className={cn(session && 'is-positive')}>{healthLabel(session?.health)}</strong><p>{session ? `建立于 ${formatTime(session.openedAt)}` : '尚未建立 SSH 会话'}</p></div>
-        <div className="workbench-panel"><span>授权模式</span><strong>{AUTH_LEVEL_LABELS[authorizationLevel]}</strong><p>执行策略对当前会话生效</p></div>
+        <div className="workbench-panel"><span>授权模式</span><strong className={cn('authorization-value', AUTH_LEVEL_TONES[authorizationLevel])}>{AUTH_LEVEL_LABELS[authorizationLevel]}</strong><p>执行策略对当前会话生效</p></div>
         <div className="workbench-panel"><span>文件边界</span><strong>{profile?.localTransferRoot || profile?.remoteTransferRoots?.length ? '已配置' : '未配置'}</strong><p>{profile?.remoteTransferRoots?.[0] ?? '传输前必须设置允许目录'}</p></div>
         <button type="button" className="health-action workbench-panel" disabled={!session || busy} onClick={onHealthCheck}><RefreshCw />检查连接</button>
       </section>
@@ -516,10 +535,39 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 function ActivityTimeline({ history, session }: { history: CommandRecord[]; session?: ConnectionSession }): JSX.Element {
   const records = history.slice(-4).reverse();
   return (
-    <div className="activity-timeline">
-      {session ? <div className="activity-event is-done"><i /><time>{formatTime(session.openedAt)}</time><strong>SSH 会话已建立</strong><p>后续终端、命令和传输操作复用该会话。</p></div> : null}
-      {records.map((record, index) => <div className={cn('activity-event', index === 0 && 'is-live')} key={record.id}><i /><time>{formatTime(record.finishedAt ?? record.startedAt)}</time><strong>执行命令</strong><p>{record.summary}</p><code>{record.command}</code></div>)}
-      {!session && records.length === 0 ? <div className="activity-event is-live"><i /><time>现在</time><strong>等待建立连接</strong><p>选择服务器并连接后，这里会显示真实操作轨迹。</p></div> : null}
+    <div className={cn('activity-timeline', (session || records.some((record) => !record.finishedAt)) && 'has-live')}>
+      {session ? (
+        <div className="activity-event is-live is-normal">
+          <i />
+          <div className="activity-event-flags"><span className="activity-phase">进行中</span><time>{formatTime(session.openedAt)}</time></div>
+          <strong>SSH 会话运行中</strong>
+          <p>会话保持在线，可继续使用终端和文件舱。</p>
+        </div>
+      ) : null}
+      {records.map((record) => {
+        const state = getCommandActivityState(record);
+        return (
+          <div className={cn('activity-event', state.phase === 'live' ? 'is-live' : 'is-history', state.risk === 'high' ? 'is-high' : 'is-normal')} key={record.id}>
+            <i />
+            <div className="activity-event-flags">
+              <span className="activity-phase">{state.phase === 'live' ? '进行中' : '历史'}</span>
+              {state.risk === 'high' ? <span className="activity-risk">高危</span> : null}
+              <time>{formatTime(record.finishedAt ?? record.startedAt)}</time>
+            </div>
+            <strong>执行命令</strong>
+            <p>{record.summary}</p>
+            <code>{record.command}</code>
+          </div>
+        );
+      })}
+      {!session && records.length === 0 ? (
+        <div className="activity-event is-live is-normal">
+          <i />
+          <div className="activity-event-flags"><span className="activity-phase">等待中</span><time>现在</time></div>
+          <strong>等待建立连接</strong>
+          <p>选择服务器并连接后，这里会显示真实操作轨迹。</p>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -540,7 +588,7 @@ function SecuritySummary({ profile, challenge, authorizationLevel }: { profile?:
     <div className="security-summary">
       <div className="security-heading"><span>安全态势</span><ShieldCheck /></div>
       <div className="security-grid">
-        <div><b>执行授权</b><span>{AUTH_LEVEL_LABELS[authorizationLevel]}</span></div>
+        <div><b>执行授权</b><span className={cn('authorization-value', AUTH_LEVEL_TONES[authorizationLevel])}>{AUTH_LEVEL_LABELS[authorizationLevel]}</span></div>
         <div><b>主机指纹</b><span className={challenge ? 'is-warning' : 'is-positive'}>{challenge ? '等待核对' : '无待确认告警'}</span></div>
         <div><b>本地边界</b><span>{profile?.localTransferRoot || '尚未配置'}</span></div>
         <div><b>远程边界</b><span>{profile?.remoteTransferRoots?.[0] ?? '尚未配置'}</span></div>
@@ -549,15 +597,276 @@ function SecuritySummary({ profile, challenge, authorizationLevel }: { profile?:
   );
 }
 
-function TransferPanel({ transfer, session, busy, onChange, onTransfer }: { transfer: FileTransferRequest; session?: ConnectionSession; busy: boolean; onChange: (value: FileTransferRequest) => void; onTransfer: () => void }): JSX.Element {
+function TransferPanel({
+  profile,
+  session,
+  busy,
+  onUploadFiles,
+  onDownloadFile
+}: {
+  profile?: ConnectionProfile;
+  session?: ConnectionSession;
+  busy: boolean;
+  onUploadFiles: (files: LocalFileSelection[], remoteDirectory: string) => Promise<void>;
+  onDownloadFile: (entry: RemoteFileEntry) => Promise<void>;
+}): JSX.Element {
+  const remoteRoots = useMemo(() => {
+    const normalized = (profile?.remoteTransferRoots ?? []).flatMap((root) => {
+      try {
+        return [normalizeRemotePath(root)];
+      } catch {
+        return [];
+      }
+    });
+    return [...new Set(normalized)];
+  }, [profile?.remoteTransferRoots]);
+  const [selectedRoot, setSelectedRoot] = useState('');
+  const [directory, setDirectory] = useState('');
+  const [entries, setEntries] = useState<RemoteFileEntry[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [panelError, setPanelError] = useState<string>();
+  const [refreshVersion, setRefreshVersion] = useState(0);
+  const [dragging, setDragging] = useState(false);
+  const dragDepthRef = useRef(0);
+  const savedLocationsRef = useRef(new Map<string, { root: string; directory: string }>());
+  const selectedRootRef = useRef(selectedRoot);
+  const directoryRef = useRef(directory);
+  const rootsKey = remoteRoots.join('\u0000');
+  const profileKey = profile?.id ?? '';
+  const withinTransferBoundary = isRemotePathWithinRoots(directory, remoteRoots);
+  const canTransfer = Boolean(
+    session && profile?.localTransferRoot && directory && withinTransferBoundary && !busy
+  );
+
+  selectedRootRef.current = selectedRoot;
+  directoryRef.current = directory;
+
+  useEffect(() => {
+    const saved = savedLocationsRef.current.get(profileKey);
+    const root = saved && remoteRoots.includes(saved.root) ? saved.root : remoteRoots[0] ?? '';
+    let nextDirectory = root || '/';
+    if (saved) {
+      try {
+        nextDirectory = normalizeRemotePath(saved.directory);
+      } catch {
+        nextDirectory = root || '/';
+      }
+    }
+    setSelectedRoot(root);
+    setDirectory(nextDirectory);
+    setEntries([]);
+    setPanelError(undefined);
+    return () => {
+      if (profileKey) {
+        savedLocationsRef.current.set(profileKey, {
+          root: selectedRootRef.current,
+          directory: directoryRef.current
+        });
+      }
+    };
+  }, [profileKey, rootsKey]);
+
+  useEffect(() => {
+    if (!session || !directory) {
+      setEntries([]);
+      setLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setLoading(true);
+    setPanelError(undefined);
+    void window.aiSsh.listRemoteDirectory(session.id, directory).then((nextEntries) => {
+      if (!cancelled) setEntries(nextEntries);
+    }).catch((error: unknown) => {
+      if (!cancelled) {
+        setEntries([]);
+        setPanelError(error instanceof Error ? error.message : String(error));
+      }
+    }).finally(() => {
+      if (!cancelled) setLoading(false);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [session?.id, directory, refreshVersion]);
+
+  function changeRoot(root: string): void {
+    setSelectedRoot(root);
+    setDirectory(root);
+  }
+
+  async function upload(files: LocalFileSelection[]): Promise<void> {
+    if (!canTransfer || files.length === 0) return;
+    setPanelError(undefined);
+    try {
+      await onUploadFiles(files, directory);
+      setRefreshVersion((value) => value + 1);
+    } catch (error) {
+      setPanelError(error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  async function chooseFiles(): Promise<void> {
+    if (!canTransfer) return;
+    try {
+      const files = await window.aiSsh.pickLocalFiles(profile?.localTransferRoot);
+      await upload(files);
+    } catch (error) {
+      setPanelError(error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  function containsFiles(event: React.DragEvent): boolean {
+    return Array.from(event.dataTransfer.types).includes('Files');
+  }
+
+  function handleDragEnter(event: React.DragEvent<HTMLDivElement>): void {
+    if (!canTransfer || !containsFiles(event)) return;
+    event.preventDefault();
+    dragDepthRef.current += 1;
+    setDragging(true);
+  }
+
+  function handleDragOver(event: React.DragEvent<HTMLDivElement>): void {
+    if (!canTransfer || !containsFiles(event)) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = 'copy';
+  }
+
+  function handleDragLeave(event: React.DragEvent<HTMLDivElement>): void {
+    if (!containsFiles(event)) return;
+    dragDepthRef.current = Math.max(0, dragDepthRef.current - 1);
+    if (dragDepthRef.current === 0) setDragging(false);
+  }
+
+  function handleDrop(event: React.DragEvent<HTMLDivElement>): void {
+    if (!canTransfer || !containsFiles(event)) return;
+    event.preventDefault();
+    dragDepthRef.current = 0;
+    setDragging(false);
+    const files = Array.from(event.dataTransfer.files).flatMap<LocalFileSelection>((file) => {
+      try {
+        const filePath = window.aiSsh.getPathForDroppedFile(file);
+        return filePath ? [{ name: file.name, path: filePath }] : [];
+      } catch {
+        return [];
+      }
+    });
+    if (files.length === 0) {
+      setPanelError('没有读取到可上传的本地文件');
+      return;
+    }
+    void upload(files);
+  }
+
+  async function download(entry: RemoteFileEntry): Promise<void> {
+    setPanelError(undefined);
+    try {
+      await onDownloadFile(entry);
+    } catch (error) {
+      setPanelError(error instanceof Error ? error.message : String(error));
+    }
+  }
+
   return (
-    <div className="transfer-panel">
-      <div className="transfer-route"><div><HardDrive /><span>本地</span></div><ChevronRight /><div><Server /><span>远程</span></div></div>
-      <Field label="传输方向"><Select value={transfer.direction} onChange={(event) => onChange({ ...transfer, direction: event.target.value as FileTransferRequest['direction'] })}><option value="upload">上传到服务器</option><option value="download">下载到本地</option></Select></Field>
-      <Field label="本地路径"><Input value={transfer.localPath} onChange={(event) => onChange({ ...transfer, localPath: event.target.value })} /></Field>
-      <Field label="远程路径"><Input value={transfer.remotePath} onChange={(event) => onChange({ ...transfer, remotePath: event.target.value })} /></Field>
-      <Button disabled={!session || busy} onClick={onTransfer}>{transfer.direction === 'upload' ? <Upload /> : <Download />}开始传输</Button>
-      {!session ? <p className="transfer-hint">建立 SSH 会话后才能传输文件。</p> : null}
+    <div
+      className={cn('transfer-panel', dragging && 'is-dragging')}
+      onDragEnter={handleDragEnter}
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
+    >
+      <div className="file-browser-actions">
+        <Select
+          aria-label="远程允许目录"
+          disabled={!session || remoteRoots.length === 0 || busy}
+          value={selectedRoot}
+          onChange={(event) => changeRoot(event.target.value)}
+        >
+          {remoteRoots.length === 0 ? <option value="">未配置传输目录（仅浏览）</option> : null}
+          {remoteRoots.map((root) => <option key={root} value={root}>{root}</option>)}
+        </Select>
+        <button
+          type="button"
+          disabled={!directory || directory === '/' || loading || busy}
+          title={directory === '/' ? '已到服务器根目录' : '返回上级目录'}
+          aria-label={directory === '/' ? '已到服务器根目录' : '返回上级目录'}
+          onClick={() => setDirectory(getRemoteParent(directory, '/'))}
+        ><FolderUp /></button>
+        <button
+          type="button"
+          disabled={!session || !directory || loading || busy}
+          title="刷新目录"
+          aria-label="刷新目录"
+          onClick={() => setRefreshVersion((value) => value + 1)}
+        ><RefreshCw /></button>
+        <button
+          type="button"
+          className="file-upload-action"
+          disabled={!canTransfer}
+          title="选择本地文件上传"
+          onClick={() => void chooseFiles()}
+        ><Upload /><span>上传</span></button>
+      </div>
+
+      <div className="remote-path-bar" title={directory || '尚未选择远程目录'}>
+        <Server /><code>{directory || '尚未选择远程目录'}</code>
+      </div>
+
+      <div className="remote-file-list" role="table" aria-label="远程服务器文件">
+        <div className="remote-file-head" role="row">
+          <span role="columnheader">名称</span><span role="columnheader">大小 / 修改时间</span>
+        </div>
+        {!session ? <div className="file-browser-empty">连接服务器后可浏览远程文件</div> : null}
+        {session && loading ? <div className="file-browser-empty"><RefreshCw className="is-spinning" />正在读取目录…</div> : null}
+        {session && !loading && panelError ? (
+          <div className="file-browser-error"><span>{panelError}</span><button type="button" onClick={() => setRefreshVersion((value) => value + 1)}>重试</button></div>
+        ) : null}
+        {session && !loading && !panelError && entries.length === 0 ? <div className="file-browser-empty">当前目录为空</div> : null}
+        {!loading && !panelError ? entries.map((entry) => {
+          const EntryIcon = entry.type === 'directory' ? Folder : entry.type === 'symlink' ? Link2 : FileText;
+          return (
+            <div className={cn('remote-file-row', entry.type === 'directory' && 'is-directory')} role="row" key={entry.path}>
+              <button
+                type="button"
+                className="remote-entry-main"
+                disabled={entry.type !== 'directory'}
+                title={entry.type === 'directory' ? '双击进入目录' : entry.path}
+                onDoubleClick={() => entry.type === 'directory' && setDirectory(entry.path)}
+                onKeyDown={(event) => {
+                  if (entry.type === 'directory' && event.key === 'Enter') setDirectory(entry.path);
+                }}
+              >
+                <EntryIcon />
+                <span><b>{entry.name}</b><small>{entry.type === 'directory' ? '文件夹' : entry.type === 'symlink' ? '符号链接（不可进入）' : '文件'}</small></span>
+              </button>
+              <div className="remote-entry-meta">
+                <span>{entry.type === 'file' ? formatFileSize(entry.size) : '—'}</span>
+                <time>{formatFileTime(entry.modifiedAt)}</time>
+              </div>
+              {entry.type === 'file' ? (
+                <button
+                  type="button"
+                  className="remote-download-action"
+                  disabled={!canTransfer}
+                  title="下载到本地"
+                  aria-label={`下载 ${entry.name}`}
+                  onClick={() => void download(entry)}
+                ><Download /></button>
+              ) : null}
+            </div>
+          );
+        }) : null}
+      </div>
+
+      {!profile?.localTransferRoot ? (
+        <p className="transfer-hint">配置本地文件允许目录后，才能上传或下载。</p>
+      ) : !withinTransferBoundary ? (
+        <p className="transfer-hint">当前目录仅供浏览；进入配置的远程允许目录后可传输文件。</p>
+      ) : (
+        <p className="transfer-hint">可点击上传，或把本地文件拖到文件列表中。</p>
+      )}
+      {dragging ? <div className="file-drop-overlay"><Upload /><strong>释放以上传到当前目录</strong></div> : null}
     </div>
   );
 }
@@ -568,12 +877,11 @@ export function ActivityRail({
   history,
   challenge,
   authorizationLevel,
-  transfer,
   view,
   busy,
   onViewChange,
-  onTransferChange,
-  onTransfer,
+  onUploadFiles,
+  onDownloadFile,
   onConfirmHostKey
 }: {
   profile?: ConnectionProfile;
@@ -581,12 +889,11 @@ export function ActivityRail({
   history: CommandRecord[];
   challenge?: HostKeyTrustChallenge;
   authorizationLevel: AuthorizationLevel;
-  transfer: FileTransferRequest;
   view: InspectorView;
   busy: boolean;
   onViewChange: (value: InspectorView) => void;
-  onTransferChange: (value: FileTransferRequest) => void;
-  onTransfer: () => void;
+  onUploadFiles: (files: LocalFileSelection[], remoteDirectory: string) => Promise<void>;
+  onDownloadFile: (entry: RemoteFileEntry) => Promise<void>;
   onConfirmHostKey: (challenge: HostKeyTrustChallenge) => void;
 }): JSX.Element {
   return (
@@ -597,7 +904,13 @@ export function ActivityRail({
         <div className="rail-tabs"><button type="button" className={cn(view === 'activity' && 'is-active')} onClick={() => onViewChange('activity')} title="协作轨迹"><Activity /></button><button type="button" className={cn(view === 'transfer' && 'is-active')} onClick={() => onViewChange('transfer')} title="文件传输"><Upload /></button></div>
       </div>
       <div className="activity-rail-body">
-        {view === 'activity' ? <><ActivityTimeline history={history} session={session} />{challenge ? <HostKeyApproval challenge={challenge} busy={busy} onConfirm={() => onConfirmHostKey(challenge)} /> : null}</> : <TransferPanel transfer={transfer} session={session} busy={busy} onChange={onTransferChange} onTransfer={onTransfer} />}
+        <div className={cn('rail-view', view !== 'activity' && 'is-hidden')}>
+          <ActivityTimeline history={history} session={session} />
+          {challenge ? <HostKeyApproval challenge={challenge} busy={busy} onConfirm={() => onConfirmHostKey(challenge)} /> : null}
+        </div>
+        <div className={cn('rail-view rail-transfer-view', view !== 'transfer' && 'is-hidden')}>
+          <TransferPanel profile={profile} session={session} busy={busy} onUploadFiles={onUploadFiles} onDownloadFile={onDownloadFile} />
+        </div>
       </div>
       <SecuritySummary profile={profile} challenge={challenge} authorizationLevel={authorizationLevel} />
     </aside>

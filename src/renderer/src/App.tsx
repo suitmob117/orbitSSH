@@ -5,8 +5,9 @@ import type {
   ConnectionProfile,
   ConnectionProfileInput,
   ConnectionSession,
-  FileTransferRequest,
-  HostKeyTrustChallenge
+  HostKeyTrustChallenge,
+  LocalFileSelection,
+  RemoteFileEntry
 } from '@shared/types';
 import {
   ActivityRail,
@@ -16,6 +17,8 @@ import {
   type CenterView,
   type InspectorView
 } from './components/workbench';
+import { parseThemePreference, resolveTheme, type ThemePreference } from './lib/theme';
+import { joinRemotePath } from './lib/remote-path';
 
 const DEFAULT_FORM: ConnectionProfileInput = {
   name: '',
@@ -34,18 +37,10 @@ const DEFAULT_FORM: ConnectionProfileInput = {
   remoteTransferRoots: []
 };
 
-type ThemePreference = 'system' | 'light' | 'dark';
-
 const THEME_STORAGE_KEY = 'ai-ssh:theme-preference';
 
 function getInitialThemePreference(): ThemePreference {
-  const stored = window.localStorage.getItem(THEME_STORAGE_KEY);
-  return stored === 'system' || stored === 'light' || stored === 'dark' ? stored : 'system';
-}
-
-function resolveTheme(preference: ThemePreference): 'light' | 'dark' {
-  if (preference !== 'system') return preference;
-  return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+  return parseThemePreference(window.localStorage.getItem(THEME_STORAGE_KEY));
 }
 
 function toProfileForm(profile: ConnectionProfile): ConnectionProfileInput {
@@ -76,14 +71,6 @@ export function App(): JSX.Element {
   const [editingId, setEditingId] = useState<string>();
   const [form, setForm] = useState<ConnectionProfileInput>(DEFAULT_FORM);
   const [authorizationLevel, setAuthorizationLevel] = useState<AuthorizationLevel>('ask_every_time');
-  const [command, setCommand] = useState('pwd && uptime');
-  const [commandOutput, setCommandOutput] = useState('');
-  const [transfer, setTransfer] = useState<FileTransferRequest>({
-    sessionId: '',
-    localPath: '',
-    remotePath: '',
-    direction: 'upload'
-  });
   const [centerView, setCenterView] = useState<CenterView>('terminal');
   const [inspectorView, setInspectorView] = useState<InspectorView>('activity');
   const [themePreference, setThemePreference] = useState<ThemePreference>(getInitialThemePreference);
@@ -129,9 +116,11 @@ export function App(): JSX.Element {
   useEffect(() => {
     const media = window.matchMedia('(prefers-color-scheme: dark)');
     const applyTheme = () => {
-      const theme = resolveTheme(themePreference);
+      const theme = resolveTheme(themePreference, media.matches);
       document.documentElement.classList.toggle('dark', theme === 'dark');
-      document.documentElement.style.colorScheme = theme;
+      document.documentElement.classList.toggle('green', theme === 'green');
+      document.documentElement.style.colorScheme = theme === 'light' ? 'light' : 'dark';
+      void window.aiSsh.setTitleBarTheme(theme);
     };
     applyTheme();
     window.localStorage.setItem(THEME_STORAGE_KEY, themePreference);
@@ -142,17 +131,11 @@ export function App(): JSX.Element {
     return undefined;
   }, [themePreference]);
 
-  useEffect(() => {
-    if (activeSession) {
-      setTransfer((current) => ({ ...current, sessionId: activeSession.id }));
-    }
-  }, [activeSession?.id]);
-
   function selectProfile(profile: ConnectionProfile): void {
     setSelectedProfileId(profile.id);
     setEditingId(profile.id);
     setForm(toProfileForm(profile));
-    setCommandOutput('');
+    setMessage(undefined);
     setCenterView('terminal');
   }
 
@@ -160,7 +143,7 @@ export function App(): JSX.Element {
     setEditingId(undefined);
     setSelectedProfileId(undefined);
     setForm(DEFAULT_FORM);
-    setCommandOutput('');
+    setMessage(undefined);
     setCenterView('config');
   }
 
@@ -176,6 +159,38 @@ export function App(): JSX.Element {
       setMessage('连接配置已保存');
     } catch (error) {
       setMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function exportProfiles(): Promise<void> {
+    setBusy(true);
+    setMessage(undefined);
+    try {
+      const result = await window.aiSsh.exportProfiles();
+      if (result) {
+        setMessage(`已导出 ${result.count} 个配置${result.includesSecrets ? '（包含敏感信息）' : '（不含密码和私钥）'}`);
+      }
+    } catch (error) {
+      setMessage(`导出失败：${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function importProfiles(): Promise<void> {
+    setBusy(true);
+    setMessage(undefined);
+    try {
+      const result = await window.aiSsh.importProfiles();
+      if (result) {
+        await refresh();
+        const skipped = result.skippedCount ? `，跳过 ${result.skippedCount} 个重复配置` : '';
+        setMessage(`已导入 ${result.importedCount} 个配置${skipped}${result.includedSecrets ? '，凭据已安全保存' : '，缺少的凭据请重新填写'}`);
+      }
+    } catch (error) {
+      setMessage(`导入失败：${error instanceof Error ? error.message : String(error)}`);
     } finally {
       setBusy(false);
     }
@@ -200,15 +215,14 @@ export function App(): JSX.Element {
   async function openSession(): Promise<void> {
     if (!selectedProfileId) return;
     setBusy(true);
-    setMessage('正在连接服务器…');
+    setMessage(undefined);
     try {
-      const session = await window.aiSsh.openSession(selectedProfileId, authorizationLevel);
+      await window.aiSsh.openSession(selectedProfileId, authorizationLevel);
       await refresh();
-      setTransfer((current) => ({ ...current, sessionId: session.id }));
       setCenterView('terminal');
-      setMessage('连接已建立，终端会复用当前会话');
+      setMessage('连接成功');
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : String(error));
+      setMessage(`连接失败：${error instanceof Error ? error.message : String(error)}`);
       setHostKeyChallenges(await window.aiSsh.listHostKeyTrustChallenges());
     } finally {
       setBusy(false);
@@ -236,31 +250,48 @@ export function App(): JSX.Element {
     }
   }
 
-  async function runCommand(): Promise<void> {
-    if (!activeSession || !command.trim()) return;
+  async function uploadFiles(files: LocalFileSelection[], remoteDirectory: string): Promise<void> {
+    if (!activeSession || files.length === 0) return;
     setBusy(true);
     setMessage(undefined);
     try {
-      const result = await window.aiSsh.runCommand(activeSession.id, command);
-      setCommandOutput([result.stdout, result.stderr].filter(Boolean).join('\n'));
-      setHistory((items) => [...items, result.record]);
-      setMessage(`命令完成，退出码 ${result.record.exitCode ?? '未知'}`);
+      for (const file of files) {
+        await window.aiSsh.transferFile({
+          sessionId: activeSession.id,
+          localPath: file.path,
+          remotePath: joinRemotePath(remoteDirectory, file.name),
+          direction: 'upload'
+        });
+      }
+      setMessage(`已上传 ${files.length} 个文件`);
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : String(error));
+      setMessage(`上传失败：${error instanceof Error ? error.message : String(error)}`);
+      throw error;
     } finally {
       setBusy(false);
     }
   }
 
-  async function transferFile(): Promise<void> {
-    if (!activeSession) return;
+  async function downloadFile(entry: RemoteFileEntry): Promise<void> {
+    if (!activeSession || !selectedProfile?.localTransferRoot) return;
+    const localPath = await window.aiSsh.pickDownloadTarget(
+      selectedProfile.localTransferRoot,
+      entry.name
+    );
+    if (!localPath) return;
     setBusy(true);
     setMessage(undefined);
     try {
-      await window.aiSsh.transferFile({ ...transfer, sessionId: activeSession.id });
-      setMessage(transfer.direction === 'upload' ? '文件上传完成' : '文件下载完成');
+      await window.aiSsh.transferFile({
+        sessionId: activeSession.id,
+        localPath,
+        remotePath: entry.path,
+        direction: 'download'
+      });
+      setMessage('文件下载完成');
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : String(error));
+      setMessage(`下载失败：${error instanceof Error ? error.message : String(error)}`);
+      throw error;
     } finally {
       setBusy(false);
     }
@@ -268,6 +299,9 @@ export function App(): JSX.Element {
 
   return (
     <div className="ai-ssh-workbench">
+      <div className="window-titlebar" aria-hidden="true">
+        <span>OrbitSSH</span>
+      </div>
       <AppTopbar
         profileName={selectedProfile?.name}
         themePreference={themePreference}
@@ -278,28 +312,28 @@ export function App(): JSX.Element {
           profiles={profiles}
           sessions={sessions}
           selectedProfileId={selectedProfileId}
+          busy={busy}
           onCreate={createProfile}
           onSelect={selectProfile}
+          onImport={() => void importProfiles()}
+          onExport={() => void exportProfiles()}
         />
         <CenterWorkbench
           profile={selectedProfile}
           session={activeSession}
+          sessions={sessions.filter((session) => session.health !== 'disconnected')}
           form={form}
           authorizationLevel={authorizationLevel}
           history={visibleHistory}
           view={centerView}
-          command={command}
-          commandOutput={commandOutput}
           busy={busy}
           message={message}
           onViewChange={setCenterView}
           onFormChange={setForm}
           onAuthorizationLevelChange={setAuthorizationLevel}
-          onCommandChange={setCommand}
           onConnect={() => void openSession()}
           onDisconnect={() => void closeSession()}
           onHealthCheck={() => void checkHealth()}
-          onRunCommand={() => void runCommand()}
           onSave={() => void saveProfile()}
           onOpenTransfer={() => setInspectorView('transfer')}
         />
@@ -309,12 +343,11 @@ export function App(): JSX.Element {
           history={visibleHistory}
           challenge={hostKeyChallenge}
           authorizationLevel={authorizationLevel}
-          transfer={transfer}
           view={inspectorView}
           busy={busy}
           onViewChange={setInspectorView}
-          onTransferChange={setTransfer}
-          onTransfer={() => void transferFile()}
+          onUploadFiles={uploadFiles}
+          onDownloadFile={downloadFile}
           onConfirmHostKey={(challenge) => void confirmHostKeyTrust(challenge)}
         />
       </div>

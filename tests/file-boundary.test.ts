@@ -133,3 +133,13 @@ test('未配置允许目录时拒绝所有文件传输', async () => {
     /未配置.*允许目录/
   );
 });
+
+test('远程目录浏览复用文件传输边界并规范化路径', () => {
+  const boundary = new FileBoundary({ localRoot: 'C:\\Downloads', remoteRoots: ['/srv/app'] });
+
+  assert.equal(boundary.resolveRemotePath('/srv/app/logs/.'), '/srv/app/logs');
+  assert.throws(() => boundary.resolveRemotePath('/srv/application'), /允许目录/);
+  assert.throws(() => boundary.resolveRemotePath('/srv/app/../secret'), /允许目录/);
+  assert.equal(boundary.resolveRemoteBrowsePath('/etc/ssh/.'), '/etc/ssh');
+  assert.throws(() => boundary.resolveRemoteBrowsePath('/etc/../root'), /浏览路径/);
+});

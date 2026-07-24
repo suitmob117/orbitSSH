@@ -1,6 +1,7 @@
 import { EventEmitter } from 'node:events';
 import { readFile } from 'node:fs/promises';
 import { createHash, randomUUID } from 'node:crypto';
+import path from 'node:path';
 import { Client, type ConnectConfig, type ClientChannel } from 'ssh2';
 import type {
   AuthorizationLevel,
@@ -11,6 +12,7 @@ import type {
   FileTransferResult,
   HostKeyTrustConfirmation,
   HostKeyTrustChallenge,
+  RemoteFileEntry,
   TerminalChunk
 } from '../shared/types';
 import {
@@ -76,6 +78,17 @@ export class SshSessionManager extends EventEmitter {
     return [...this.sessions.values()].map((managed) => managed.session);
   }
 
+  getSession(sessionId: string): ConnectionSession {
+    return this.getManaged(sessionId).session;
+  }
+
+  setAuthorizationLevel(sessionId: string, authorizationLevel: AuthorizationLevel): ConnectionSession {
+    const session = this.getManaged(sessionId).session;
+    session.authorizationLevel = authorizationLevel;
+    this.emit('session-updated', session);
+    return session;
+  }
+
   assertProfileCanBeUpdated(profileId: string, endpoint: Pick<ConnectionProfile, 'host' | 'port'>): void {
     const active = this.findActiveProfileSession(profileId);
     if (this.openingSessions.has(profileId)) {
@@ -126,22 +139,22 @@ export class SshSessionManager extends EventEmitter {
     this.discardHostKeyChallenge(profileId);
   }
 
-  async openSession(profileId: string, authorizationLevel: AuthorizationLevel): Promise<ConnectionSession> {
+  async openSession(profileId: string, authorizationLevel?: AuthorizationLevel): Promise<ConnectionSession> {
     const existing = [...this.sessions.values()].find((item) => item.profile.id === profileId);
     if (existing && existing.session.health !== 'disconnected') {
-      existing.session.authorizationLevel = authorizationLevel;
+      if (authorizationLevel) existing.session.authorizationLevel = authorizationLevel;
       return existing.session;
     }
 
     const opening = this.openingSessions.get(profileId);
     if (opening) {
       const session = await opening;
-      session.authorizationLevel = authorizationLevel;
+      if (authorizationLevel) session.authorizationLevel = authorizationLevel;
       return session;
     }
 
     // 在任何 await 之前登记，确保并发 open 与 IPC 配置变更都能看到 in-flight 状态。
-    const openingSession = this.openSessionOnce(profileId, authorizationLevel);
+    const openingSession = this.openSessionOnce(profileId, authorizationLevel ?? 'ask_every_time');
     this.openingSessions.set(profileId, openingSession);
     try {
       return await openingSession;
@@ -220,6 +233,14 @@ export class SshSessionManager extends EventEmitter {
     }
 
     enforceCommandAuthorization(managed.session.authorizationLevel, command);
+    return this.executeCommand(sessionId, command);
+  }
+
+  async executeCommand(sessionId: string, command: string): Promise<CommandResult> {
+    const managed = this.getManaged(sessionId);
+    if (managed.session.health === 'disconnected') {
+      throw new Error('连接会话已断开，请重新连接');
+    }
     const redactedCommand = redactCommand(command);
     const startedAt = new Date().toISOString();
     const result = await this.execRaw(managed.client, command);
@@ -248,6 +269,11 @@ export class SshSessionManager extends EventEmitter {
   async transferFile(request: FileTransferRequest): Promise<FileTransferResult> {
     const managed = this.getManaged(request.sessionId);
     enforceTransferAuthorization(managed.session.authorizationLevel, request.direction);
+    return this.executeFileTransfer(request);
+  }
+
+  async executeFileTransfer(request: FileTransferRequest): Promise<FileTransferResult> {
+    const managed = this.getManaged(request.sessionId);
     const resolvedPaths = await this.fileBoundaryForProfile(managed.profile).resolve(request);
     const startedAt = new Date().toISOString();
 
@@ -283,6 +309,59 @@ export class SshSessionManager extends EventEmitter {
       startedAt,
       finishedAt: new Date().toISOString()
     };
+  }
+
+  async listRemoteDirectory(sessionId: string, remotePath: string): Promise<RemoteFileEntry[]> {
+    const managed = this.getManaged(sessionId);
+    const boundary = this.fileBoundaryForProfile(managed.profile);
+    const directory = boundary.resolveRemoteBrowsePath(remotePath);
+
+    return new Promise<RemoteFileEntry[]>((resolve, reject) => {
+      managed.client.sftp((error, sftp) => {
+        if (error) {
+          reject(sanitizedError(error));
+          return;
+        }
+        sftp.readdir(directory, (readError, list) => {
+          sftp.end();
+          if (readError) {
+            reject(sanitizedError(readError));
+            return;
+          }
+          const entries = list.flatMap<RemoteFileEntry>((entry) => {
+            if (!entry.filename || entry.filename === '.' || entry.filename === '..' || entry.filename.includes('/')) {
+              return [];
+            }
+            let childPath: string;
+            try {
+              childPath = boundary.resolveRemoteBrowsePath(path.posix.join(directory, entry.filename));
+            } catch {
+              return [];
+            }
+            const type = entry.attrs.isDirectory()
+              ? 'directory'
+              : entry.attrs.isFile()
+                ? 'file'
+                : entry.attrs.isSymbolicLink()
+                  ? 'symlink'
+                  : 'other';
+            return [{
+              name: entry.filename,
+              path: childPath,
+              type,
+              size: entry.attrs.size,
+              modifiedAt: entry.attrs.mtime > 0 ? new Date(entry.attrs.mtime * 1000).toISOString() : undefined
+            }];
+          });
+          entries.sort((left, right) => {
+            if (left.type === 'directory' && right.type !== 'directory') return -1;
+            if (left.type !== 'directory' && right.type === 'directory') return 1;
+            return left.name.localeCompare(right.name, 'zh-CN', { numeric: true, sensitivity: 'base' });
+          });
+          resolve(entries);
+        });
+      });
+    });
   }
 
   async openTerminal(sessionId: string): Promise<string> {
@@ -321,6 +400,16 @@ export class SshSessionManager extends EventEmitter {
     });
 
     return terminalId;
+  }
+
+  runTerminalCommand(sessionId: string, terminalId: string, command: string): void {
+    const managed = this.getManaged(sessionId);
+    const terminal = managed.terminals.get(terminalId);
+    if (!terminal) {
+      throw new Error(`当前会话中不存在终端：${terminalId}`);
+    }
+    enforceCommandAuthorization(managed.session.authorizationLevel, command);
+    terminal.write(`${command}\r`);
   }
 
   writeTerminal(terminalId: string, data: string): void {
