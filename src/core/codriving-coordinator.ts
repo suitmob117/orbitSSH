@@ -56,6 +56,7 @@ export class CodrivingCoordinator {
   private readonly trustedUntil = new Map<string, string>();
   private readonly authorizationLevels = new Map<string, AuthorizationLevel>();
   private readonly pausedCodexSessions = new Set<string>();
+  private readonly actionListeners = new Set<(action: CodrivingAction) => void>();
   private readonly id: () => string;
   private readonly now: () => Date;
   private readonly approvalTtlMs: number;
@@ -225,6 +226,11 @@ export class CodrivingCoordinator {
     return this.pausedCodexSessions.has(sessionId);
   }
 
+  onActionChanged(listener: (action: CodrivingAction) => void): () => void {
+    this.actionListeners.add(listener);
+    return () => this.actionListeners.delete(listener);
+  }
+
   setAuthorizationLevel(input: {
     sessionId: string;
     authorizationLevel: AuthorizationLevel;
@@ -383,7 +389,14 @@ export class CodrivingCoordinator {
     action.status = status;
     action.sequence = ++this.nextSequence;
     action.updatedAt = this.now().toISOString();
-    this.ledger?.recordCodrivingAction({ ...action });
+    let persistenceError: unknown;
+    try {
+      this.ledger?.recordCodrivingAction({ ...action });
+    } catch (error) {
+      persistenceError = error;
+    }
+    this.notifyActionChanged(action);
+    if (persistenceError) throw persistenceError;
   }
 
   private settleExecutedAction(
@@ -394,12 +407,24 @@ export class CodrivingCoordinator {
       this.updateActionStatus(action, status);
     } catch {
       action.reason = `${action.reason}；本地共驾账本写入失败，请勿据此重复执行操作`;
+      this.notifyActionChanged(action);
     }
   }
 
   private recordNewAction(action: CodrivingAction): void {
     this.events.push(action);
     this.ledger?.recordCodrivingAction({ ...action });
+    this.notifyActionChanged(action);
+  }
+
+  private notifyActionChanged(action: CodrivingAction): void {
+    for (const listener of this.actionListeners) {
+      try {
+        listener({ ...action });
+      } catch {
+        // 界面或 IPC 订阅失败不能改变远端动作的执行结果。
+      }
+    }
   }
 
   private persistSessionState(sessionId: string, authorizationLevel?: AuthorizationLevel): void {

@@ -74,6 +74,7 @@ export class RuntimeController {
   private readonly coordinator: CodrivingCoordinator;
   private readonly lifetime: RuntimeLifetime;
   private readonly portability: ProfilePortabilityService;
+  private readonly unsubscribeActionUpdates: () => void;
   private readonly pendingActionLeases = new Set<string>();
   private readonly approvalTimer: NodeJS.Timeout;
 
@@ -87,6 +88,7 @@ export class RuntimeController {
       options.services.profileStore,
       options.services.credentialVault
     );
+    this.unsubscribeActionUpdates = this.coordinator.onActionChanged((action) => this.emitAction(action));
     this.services.sessionManager.on('terminal-data', (chunk: TerminalChunk) => {
       this.options.emit?.('terminal:data', chunk);
     });
@@ -263,7 +265,6 @@ export class RuntimeController {
         const approval = codrivingApprovalSchema.parse(params);
         const action = this.coordinator.rejectAction(approval);
         this.releasePendingAction(approval.actionId);
-        this.emitAction(action);
         return action;
       }
       case 'codriving:pause': {
@@ -299,6 +300,7 @@ export class RuntimeController {
 
   async close(): Promise<void> {
     clearInterval(this.approvalTimer);
+    this.unsubscribeActionUpdates();
     for (const session of this.services.sessionManager.listSessions()) {
       try {
         await this.services.sessionManager.closeSession(session.id);
@@ -332,7 +334,6 @@ export class RuntimeController {
           }
         }
       }
-      this.emitAction(result.action);
       return result;
     } finally {
       this.lifetime.finishAction(leaseId);
@@ -353,7 +354,6 @@ export class RuntimeController {
     if (policy === 'close_all') {
       for (const action of this.coordinator.rejectAllPending()) {
         this.releasePendingAction(action.id);
-        this.emitAction(action);
       }
       for (const session of sessions) {
         await this.services.sessionManager.closeSession(session.id);
@@ -390,7 +390,6 @@ export class RuntimeController {
   private expireApprovals(): void {
     for (const action of this.coordinator.expireApprovals()) {
       this.releasePendingAction(action.id);
-      this.emitAction(action);
     }
   }
 }

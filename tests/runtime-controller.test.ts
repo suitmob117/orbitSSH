@@ -8,6 +8,7 @@ import type { ConnectionSession } from '../src/shared/types';
 
 function createHarness(notifier?: { notifyPendingApproval(): void }) {
   const terminalWrites: string[] = [];
+  const emittedActions: Array<{ status: string }> = [];
   const session: ConnectionSession = {
     id: 'session-1',
     profileId: 'profile-1',
@@ -28,14 +29,21 @@ function createHarness(notifier?: { notifyPendingApproval(): void }) {
       session.authorizationLevel = level;
       return session;
     },
-    executeCommand: async () => ({
+    executeCommand: async (
+      _sessionId: string,
+      _command: string,
+      options?: { beforeStart?: () => void }
+    ) => {
+      options?.beforeStart?.();
+      return {
       record: {
         id: 'record-1', sessionId: session.id, command: 'pwd', startedAt: '',
         stdoutTail: '/srv', stderrTail: '', summary: 'ok'
       },
       stdout: '/srv',
       stderr: ''
-    }),
+      };
+    },
     getTerminalSessionId: () => session.id,
     writeTerminal: (_terminalId: string, data: string) => terminalWrites.push(data)
   });
@@ -49,10 +57,26 @@ function createHarness(notifier?: { notifyPendingApproval(): void }) {
       close: () => undefined
     } as never,
     coordinator,
-    notifier
+    notifier,
+    emit: (name, data) => {
+      if (name === 'codriving:action-updated') emittedActions.push(data as { status: string });
+    }
   });
-  return { controller, session, terminalWrites };
+  return { controller, session, terminalWrites, emittedActions };
 }
+
+test('Runtime 实时推送命令从排队、开始到完成的状态变化', async () => {
+  const { controller, session, emittedActions } = createHarness();
+  session.authorizationLevel = 'auto_readonly';
+
+  await controller.handle(
+    'commands:request',
+    { sessionId: session.id, command: 'pwd' },
+    { clientId: 'mcp-1', kind: 'mcp' }
+  );
+
+  assert.deepEqual(emittedActions.map((action) => action.status), ['queued', 'running', 'completed']);
+});
 
 test('没有桌面客户端时，待审批动作只触发不含操作详情的系统通知', async () => {
   let notifications = 0;
