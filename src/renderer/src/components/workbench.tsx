@@ -524,7 +524,7 @@ function ActivityTimeline({
   const records = takeRecentChronological(history, 3);
   const recentActions = takeRecentChronological(actions, 6);
   return (
-    <div className={cn('activity-timeline', (session || recentActions.some((action) => action.status === 'running' || action.status === 'pending_approval')) && 'has-live')}>
+    <div className={cn('activity-timeline', (session || recentActions.some((action) => action.status === 'queued' || action.status === 'running' || action.status === 'pending_approval')) && 'has-live')}>
       {session ? (
         <div className="activity-event is-live is-normal">
           <i />
@@ -534,9 +534,11 @@ function ActivityTimeline({
         </div>
       ) : null}
       {recentActions.map((action) => {
-        const live = action.status === 'running' || action.status === 'pending_approval' || action.status === 'paused';
+        const live = action.status === 'queued' || action.status === 'running' || action.status === 'pending_approval' || action.status === 'paused';
         const phase = action.status === 'pending_approval'
           ? '等待批准'
+          : action.status === 'queued'
+            ? '排队中'
           : action.status === 'running'
             ? '进行中'
             : action.status === 'paused'

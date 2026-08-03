@@ -28,6 +28,7 @@ class FakeExecutionPort implements CodrivingExecutionPort {
   readonly transfers: FileTransferRequest[] = [];
   commandError?: Error;
   commandStartGate?: Promise<void>;
+  commandFinishGate?: Promise<void>;
   readonly session: ConnectionSession = {
     id: 'session-1',
     profileId: 'profile-1',
@@ -58,6 +59,7 @@ class FakeExecutionPort implements CodrivingExecutionPort {
     if (this.commandStartGate) await this.commandStartGate;
     options?.beforeStart?.();
     this.commands.push(command);
+    if (this.commandFinishGate) await this.commandFinishGate;
     if (this.commandError) throw this.commandError;
     return commandResult(command);
   }
@@ -105,6 +107,33 @@ test('完全接管会阻止已经排队但尚未开始的 Codex 命令', async (
   const submission = await queued;
   assert.equal(submission.action.status, 'paused');
   assert.deepEqual(execution.commands, []);
+});
+
+test('命令等待队首时显示排队中，真正开始后才显示进行中', async () => {
+  let releaseStart!: () => void;
+  let releaseFinish!: () => void;
+  const execution = new FakeExecutionPort();
+  execution.session.authorizationLevel = 'auto_readonly';
+  execution.commandStartGate = new Promise<void>((resolve) => { releaseStart = resolve; });
+  execution.commandFinishGate = new Promise<void>((resolve) => { releaseFinish = resolve; });
+  const coordinator = new CodrivingCoordinator(execution);
+
+  const submissionPromise = coordinator.requestCommand({
+    sessionId: execution.session.id,
+    actor: 'codex',
+    command: 'df -h'
+  });
+  await Promise.resolve();
+  assert.equal(coordinator.listEvents(execution.session.id).at(-1)?.status, 'queued');
+
+  releaseStart();
+  await Promise.resolve();
+  await Promise.resolve();
+  assert.equal(coordinator.listEvents(execution.session.id).at(-1)?.status, 'running');
+
+  releaseFinish();
+  const submission = await submissionPromise;
+  assert.equal(submission.action.status, 'completed');
 });
 
 test('每次询问模式下 Codex 命令先形成待审批动作，不直接执行', async () => {

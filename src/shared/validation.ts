@@ -57,6 +57,7 @@ export const codrivingActionSchema = z.object({
   kind: z.enum(['command', 'file_transfer', 'control']),
   status: z.enum([
     'pending_approval',
+    'queued',
     'running',
     'completed',
     'failed',

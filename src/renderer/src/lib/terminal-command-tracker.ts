@@ -16,7 +16,7 @@ export function formatTerminalEcho(data: string): string {
 }
 
 /**
- * 只跟踪普通单行输入；按键仍由原始 PTY 处理，不在前端模拟 shell。
+ * 只跟踪普通单行输入；前端负责本地回显，完整命令在回车后交给共享执行队列。
  * heredoc、全屏程序和复杂交互命令留给后续 shell integration 支持。
  */
 export class TerminalCommandTracker {

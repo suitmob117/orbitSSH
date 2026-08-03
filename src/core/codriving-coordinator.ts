@@ -101,7 +101,7 @@ export class CodrivingCoordinator {
       sessionId: input.sessionId,
       actor: input.actor,
       kind: 'command',
-      status: requiresApproval ? 'pending_approval' : 'running',
+      status: requiresApproval ? 'pending_approval' : 'queued',
       risk: assessment.risk,
       summary: redactCommand(input.command),
       reason: assessment.reason,
@@ -118,7 +118,7 @@ export class CodrivingCoordinator {
     try {
       const result = await this.execution.executeCommand(input.sessionId, input.command, {
         echoCommand: input.actor === 'codex',
-        beforeStart: input.actor === 'codex' ? () => this.assertCodexCanStart(input.sessionId) : undefined
+        beforeStart: () => this.startQueuedCommand(action)
       });
       this.settleExecutedAction(action, 'completed');
       return { action: { ...action }, result };
@@ -255,13 +255,11 @@ export class CodrivingCoordinator {
         throw new Error('审批已过期，操作已自动拒绝');
       }
       this.pendingCommands.delete(input.actionId);
-      this.updateActionStatus(pending.action, 'running');
+      this.updateActionStatus(pending.action, 'queued');
       try {
         const result = await this.execution.executeCommand(pending.action.sessionId, pending.command, {
           echoCommand: pending.action.actor === 'codex',
-          beforeStart: pending.action.actor === 'codex'
-            ? () => this.assertCodexCanStart(pending.action.sessionId)
-            : undefined
+          beforeStart: () => this.startQueuedCommand(pending.action)
         });
         this.settleExecutedAction(pending.action, 'completed');
         return { action: { ...pending.action }, result };
@@ -364,6 +362,11 @@ export class CodrivingCoordinator {
     }
   }
 
+  private startQueuedCommand(action: CodrivingAction): void {
+    if (action.actor === 'codex') this.assertCodexCanStart(action.sessionId);
+    this.updateActionStatus(action, 'running');
+  }
+
   private approvalExpiry(): string {
     return new Date(this.now().getTime() + this.approvalTtlMs).toISOString();
   }
@@ -427,7 +430,7 @@ export class CodrivingCoordinator {
       if (state.trustedUntil) this.trustedUntil.set(state.sessionId, state.trustedUntil);
     }
     for (const action of this.events) {
-      if (action.status !== 'pending_approval' && action.status !== 'running') continue;
+      if (action.status !== 'pending_approval' && action.status !== 'queued' && action.status !== 'running') continue;
       action.reason = `${action.reason}；Runtime 已重新启动，未自动重放该操作`;
       this.updateActionStatus(action, 'interrupted');
     }

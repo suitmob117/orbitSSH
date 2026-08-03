@@ -5,6 +5,7 @@ export type AuthorizationLevel = 'ask_every_time' | 'auto_readonly' | 'trusted_s
 export type CodrivingActor = 'user' | 'codex' | 'system';
 export type CodrivingActionStatus =
   | 'pending_approval'
+  | 'queued'
   | 'running'
   | 'completed'
   | 'failed'
