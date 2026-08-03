@@ -52,6 +52,7 @@ class FakeClient extends EventEmitter {
   deferHostVerificationError = false;
   delayReady = false;
   autoCompleteTerminalCommands = true;
+  terminalCommandOutput = '/opt\n';
   readyError?: Error;
   private readyPending = false;
   private readonly pendingTerminalCompletions: Array<() => void> = [];
@@ -130,7 +131,7 @@ class FakeClient extends EventEmitter {
         if (token) {
           const complete = () => stream.emit(
             'data',
-            Buffer.from(`${data}\r\n/opt\n\u001eORBITSSH:${token}:0\u001f`)
+            Buffer.from(`${data}\r\n${client.terminalCommandOutput}\u001eORBITSSH:${token}:0\u001f`)
           );
           if (client.autoCompleteTerminalCommands) queueMicrotask(complete);
           else client.pendingTerminalCompletions.push(complete);
@@ -648,6 +649,20 @@ test('Codex 命令复用用户的唯一交互 PTY 并继承当前目录', async 
   assert.equal(harness.client.execCalls, 0);
   assert.equal(result.stdout.trim(), '/opt');
   assert.match(harness.client.terminalWrites[1] ?? '', /^pwd;/);
+});
+
+test('共享终端命令输出在写入历史和返回调用方前统一脱敏', async () => {
+  const harness = createHarness('ask_every_time');
+  harness.client.terminalCommandOutput = 'password=hunter2\ntoken=secret-token\n';
+  const session = await harness.manager.openSession('profile-1', harness.authorizationLevel);
+
+  const result = await harness.manager.executeCommand(session.id, 'show-config');
+
+  assert.equal(result.stdout.includes('hunter2'), false);
+  assert.equal(result.stdout.includes('secret-token'), false);
+  assert.match(result.stdout, /password=\[REDACTED\]/);
+  assert.match(result.stdout, /token=\[REDACTED\]/);
+  assert.equal(harness.historyRecords[0]?.stdoutTail, result.stdout);
 });
 
 test('共享终端严格按提交顺序执行，前一条完成前不会写入后一条', async () => {
