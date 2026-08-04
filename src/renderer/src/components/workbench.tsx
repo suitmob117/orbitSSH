@@ -25,7 +25,8 @@ import {
   Settings2,
   Sun,
   TerminalSquare,
-  Upload
+  Upload,
+  X
 } from 'lucide-react';
 import type {
   AuthMethod,
@@ -51,6 +52,8 @@ import {
   normalizeRemotePath
 } from '../lib/remote-path';
 import type { ThemePreference } from '../lib/theme';
+
+const orbitSshIconUrl = new URL('../../../../build/icon.png', import.meta.url).href;
 
 export type CenterView = 'terminal' | 'config' | 'history';
 export type InspectorView = 'activity' | 'transfer';
@@ -127,7 +130,14 @@ export function AppTopbar({
   return (
     <header className="workbench-topbar">
       <div className="workbench-brand">
-        <div className="workbench-brand-mark"><img src="/icon.png" alt="" /></div>
+        <div className="workbench-brand-mark">
+          <span className="workbench-brand-fallback" aria-hidden="true">O</span>
+          <img
+            src={orbitSshIconUrl}
+            alt=""
+            onError={(event) => { event.currentTarget.hidden = true; }}
+          />
+        </div>
         <div><strong>OrbitSSH</strong><span>COLLABORATIVE TERMINAL</span></div>
       </div>
       <div className="workbench-crumb">
@@ -231,7 +241,13 @@ export function ServerSidebar({
         {filteredProfiles.length === 0 ? <div className="server-empty">没有匹配的服务器</div> : null}
       </div>
       <div className="server-sidebar-foot">
-        <div><strong>Codex 协作通道</strong><span className="channel-switch is-on" role="status" aria-label="Codex 协作通道已开启" title="协作通道已开启" /></div>
+        <div>
+          <strong>Codex 协作通道</strong>
+          <span className="channel-status" role="status" aria-label="Codex 协作通道已开启">
+            <i className="channel-status-light" aria-hidden="true" />
+            <span>已开启</span>
+          </span>
+        </div>
         <p><i />按需运行 · 数据保存在本机</p>
       </div>
     </aside>
@@ -451,6 +467,7 @@ export function CenterWorkbench({
   view,
   busy,
   message,
+  onDismissMessage,
   onViewChange,
   onFormChange,
   onAuthorizationLevelChange,
@@ -472,6 +489,7 @@ export function CenterWorkbench({
   view: CenterView;
   busy: boolean;
   message?: string;
+  onDismissMessage: () => void;
   onViewChange: (value: CenterView) => void;
   onFormChange: (form: ConnectionProfileInput) => void;
   onAuthorizationLevelChange: (value: AuthorizationLevel) => void;
@@ -486,7 +504,12 @@ export function CenterWorkbench({
   return (
     <main className="center-workbench">
       <SessionHeader profile={profile} session={session} authorizationLevel={authorizationLevel} codexPaused={codexPaused} busy={busy} onAuthorizationLevelChange={onAuthorizationLevelChange} onToggleCodexPause={onToggleCodexPause} onHealthCheck={onHealthCheck} onConnect={onConnect} onDisconnect={onDisconnect} onOpenTransfer={onOpenTransfer} />
-      {message ? <div className="workbench-toast">{message}</div> : null}
+      {message ? (
+        <div className="workbench-toast" role="status">
+          <span>{message}</span>
+          <button type="button" onClick={onDismissMessage} aria-label="关闭提示" title="关闭提示"><X /></button>
+        </div>
+      ) : null}
       <section className="workspace-surface workbench-panel">
         <WorkspaceTabs view={view} onChange={onViewChange} />
         <div className={cn('terminal-workspace', view !== 'terminal' && 'is-hidden')}>

@@ -21,6 +21,7 @@ import {
 import { parseThemePreference, resolveTheme, type ThemePreference } from './lib/theme';
 import { joinRemotePath } from './lib/remote-path';
 import { getMessageAutoDismissMs } from './lib/message-lifecycle';
+import type { MessageKind } from './lib/message-lifecycle';
 
 const DEFAULT_FORM: ConnectionProfileInput = {
   name: '',
@@ -88,8 +89,16 @@ export function App(): JSX.Element {
   const [inspectorView, setInspectorView] = useState<InspectorView>('activity');
   const [themePreference, setThemePreference] = useState<ThemePreference>(getInitialThemePreference);
   const [busy, setBusy] = useState(false);
-  const [message, setMessage] = useState<string>();
+  const [messageState, setMessageState] = useState<{ id: number; text: string; kind: MessageKind }>();
   const actionCacheRef = useRef(new Map<string, CodrivingAction[]>());
+  const message = messageState?.text;
+
+  function setMessage(text?: string, kind: MessageKind = 'success'): void {
+    setMessageState((current) => text
+      ? { id: (current?.id ?? 0) + 1, text, kind }
+      : undefined
+    );
+  }
 
   const selectedProfile = profiles.find((profile) => profile.id === selectedProfileId);
   const activeSession = useMemo(() => {
@@ -128,11 +137,14 @@ export function App(): JSX.Element {
   }, []);
 
   useEffect(() => {
-    const delay = getMessageAutoDismissMs(message);
+    const delay = getMessageAutoDismissMs(messageState?.kind);
     if (delay === undefined) return;
-    const timer = window.setTimeout(() => setMessage(undefined), delay);
+    const messageId = messageState!.id;
+    const timer = window.setTimeout(() => {
+      setMessageState((current) => current?.id === messageId ? undefined : current);
+    }, delay);
     return () => window.clearTimeout(timer);
-  }, [message]);
+  }, [messageState]);
 
   useEffect(() => {
     if (!activeSession) {
@@ -231,7 +243,7 @@ export function App(): JSX.Element {
       setForm(toProfileForm(saved));
       setMessage('连接配置已保存');
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : String(error));
+      setMessage(error instanceof Error ? error.message : String(error), 'error');
     } finally {
       setBusy(false);
     }
@@ -246,7 +258,7 @@ export function App(): JSX.Element {
         setMessage(`已导出 ${result.count} 个配置${result.includesSecrets ? '（包含敏感信息）' : '（不含密码和私钥）'}`);
       }
     } catch (error) {
-      setMessage(`导出失败：${error instanceof Error ? error.message : String(error)}`);
+      setMessage(`导出失败：${error instanceof Error ? error.message : String(error)}`, 'error');
     } finally {
       setBusy(false);
     }
@@ -263,7 +275,7 @@ export function App(): JSX.Element {
         setMessage(`已导入 ${result.importedCount} 个配置${skipped}${result.includedSecrets ? '，凭据已安全保存' : '，缺少的凭据请重新填写'}`);
       }
     } catch (error) {
-      setMessage(`导入失败：${error instanceof Error ? error.message : String(error)}`);
+      setMessage(`导入失败：${error instanceof Error ? error.message : String(error)}`, 'error');
     } finally {
       setBusy(false);
     }
@@ -277,9 +289,9 @@ export function App(): JSX.Element {
         challengeId: challenge.challengeId
       });
       await refresh();
-      setMessage('主机指纹已确认，请再次连接以建立会话');
+      setMessage('主机指纹已确认，请再次连接以建立会话', 'blocking');
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : String(error));
+      setMessage(error instanceof Error ? error.message : String(error), 'error');
     } finally {
       setBusy(false);
     }
@@ -295,7 +307,7 @@ export function App(): JSX.Element {
       setCenterView('terminal');
       setMessage('连接成功');
     } catch (error) {
-      setMessage(`连接失败：${error instanceof Error ? error.message : String(error)}`);
+      setMessage(`连接失败：${error instanceof Error ? error.message : String(error)}`, 'error');
       setHostKeyChallenges(await window.aiSsh.listHostKeyTrustChallenges());
     } finally {
       setBusy(false);
@@ -315,9 +327,12 @@ export function App(): JSX.Element {
     try {
       const session = await window.aiSsh.getSessionHealth(activeSession.id);
       setSessions((items) => items.map((item) => (item.id === session.id ? session : item)));
-      setMessage(`健康检查完成：${session.health === 'connected' ? '连接正常' : '连接异常'}`);
+      setMessage(
+        `健康检查完成：${session.health === 'connected' ? '连接正常' : '连接异常'}`,
+        session.health === 'connected' ? 'success' : 'error'
+      );
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : String(error));
+      setMessage(error instanceof Error ? error.message : String(error), 'error');
     } finally {
       setBusy(false);
     }
@@ -338,7 +353,7 @@ export function App(): JSX.Element {
       setSessions((items) => items.map((item) => item.id === session.id ? session : item));
       setMessage(level === 'trusted_session' ? '已信任本次 Codex 会话 1 小时' : 'Codex 授权模式已更新');
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : String(error));
+      setMessage(error instanceof Error ? error.message : String(error), 'error');
     } finally {
       setBusy(false);
     }
@@ -354,7 +369,7 @@ export function App(): JSX.Element {
       await refresh();
       setMessage(approve ? '操作已批准并执行' : '操作已拒绝');
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : String(error));
+      setMessage(error instanceof Error ? error.message : String(error), 'error');
     } finally {
       setBusy(false);
     }
@@ -399,7 +414,7 @@ export function App(): JSX.Element {
       }
       setMessage(`已上传 ${files.length} 个文件`);
     } catch (error) {
-      setMessage(`上传失败：${error instanceof Error ? error.message : String(error)}`);
+      setMessage(`上传失败：${error instanceof Error ? error.message : String(error)}`, 'error');
       throw error;
     } finally {
       setBusy(false);
@@ -424,7 +439,7 @@ export function App(): JSX.Element {
       });
       setMessage('文件下载完成');
     } catch (error) {
-      setMessage(`下载失败：${error instanceof Error ? error.message : String(error)}`);
+      setMessage(`下载失败：${error instanceof Error ? error.message : String(error)}`, 'error');
       throw error;
     } finally {
       setBusy(false);
@@ -461,6 +476,7 @@ export function App(): JSX.Element {
           view={centerView}
           busy={busy}
           message={message}
+          onDismissMessage={() => setMessage(undefined)}
           authorizationLevel={authorizationLevel}
           onViewChange={setCenterView}
           onFormChange={setForm}

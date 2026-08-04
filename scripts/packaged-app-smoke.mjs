@@ -45,7 +45,7 @@ try {
     });
   });
   assert.equal(exitCode, 0, `打包应用启动失败，退出码：${exitCode}`);
-  console.log('OrbitSSH 打包应用启动、Runtime 和 SQLite 冒烟验证通过。');
+  console.log('OrbitSSH 打包应用启动、品牌图标、Runtime 和 SQLite 冒烟验证通过。');
 } finally {
   await rm(dataDir, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
 }

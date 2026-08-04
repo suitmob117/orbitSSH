@@ -44,13 +44,14 @@ function resolvePreloadPath(): string {
   return existing ?? candidates[0];
 }
 
-function createWindow(): void {
+function createWindow(): BrowserWindow {
   const window = new BrowserWindow({
     width: 1480,
     height: 940,
     minWidth: 1375,
     minHeight: 900,
     title: 'OrbitSSH',
+    show: process.env.ORBITSSH_PACKAGED_SMOKE_TEST !== '1',
     icon: path.join(app.getAppPath(), 'build', process.platform === 'win32' ? 'icon.ico' : 'icon.png'),
     autoHideMenuBar: true,
     backgroundColor: '#050705',
@@ -71,6 +72,42 @@ function createWindow(): void {
     void window.loadURL(process.env.ELECTRON_RENDERER_URL);
   } else {
     void window.loadFile(path.join(__dirname, '../renderer/index.html'));
+  }
+  return window;
+}
+
+async function verifyPackagedRenderer(window: BrowserWindow): Promise<void> {
+  if (window.webContents.isLoading()) {
+    await new Promise<void>((resolve, reject) => {
+      const timeout = setTimeout(() => reject(new Error('安装版渲染页面加载超时')), 10_000);
+      window.webContents.once('did-finish-load', () => {
+        clearTimeout(timeout);
+        resolve();
+      });
+      window.webContents.once('did-fail-load', (_event, code, description) => {
+        clearTimeout(timeout);
+        reject(new Error(`安装版渲染页面加载失败：${code} ${description}`));
+      });
+    });
+  }
+
+  const result = await window.webContents.executeJavaScript(`
+    (async () => {
+      const image = document.querySelector('.workbench-brand-mark img');
+      if (!(image instanceof HTMLImageElement)) {
+        return { loaded: false, reason: '找不到品牌图标元素' };
+      }
+      try { await image.decode(); } catch {}
+      return {
+        loaded: image.complete && image.naturalWidth > 0,
+        naturalWidth: image.naturalWidth,
+        source: image.currentSrc || image.src
+      };
+    })()
+  `, true) as { loaded: boolean; naturalWidth?: number; reason?: string; source?: string };
+
+  if (!result.loaded) {
+    throw new Error(`安装版品牌图标加载失败：${result.reason ?? result.source ?? '未知原因'}`);
   }
 }
 
@@ -282,8 +319,17 @@ function registerIpc(client: RuntimeRpcClient): void {
 app.whenReady().then(async () => {
   runtime = await connectRuntime({ kind: 'desktop' });
   if (process.env.ORBITSSH_PACKAGED_SMOKE_TEST === '1') {
+    registerIpc(runtime);
+    const smokeWindow = createWindow();
+    await verifyPackagedRenderer(smokeWindow);
+    const screenshotPath = process.env.ORBITSSH_PACKAGED_SMOKE_SCREENSHOT;
+    if (screenshotPath) {
+      const screenshot = await smokeWindow.webContents.capturePage();
+      await writeFile(screenshotPath, screenshot.toPNG());
+    }
     await runtime.call('profiles:list', {});
     await runtime.call('runtime:set-exit-policy', { policy: 'close_all' });
+    smokeWindow.destroy();
     await runtime.close();
     runtime = undefined;
     quitAllowed = true;
