@@ -11,16 +11,25 @@ const runtimeEndpoint = process.platform === 'win32'
   ? `\\\\.\\pipe\\orbitssh-mcp-smoke-${process.pid}`
   : path.join(dataDir, 'orbitssh-runtime.sock');
 const client = new Client({ name: 'ai-ssh-smoke', version: '1.0.0' });
+const packaged = process.argv.includes('--packaged');
+const packagedRoot = path.resolve('release/win-unpacked');
+const command = process.env.ORBITSSH_MCP_COMMAND ?? (packaged
+  ? path.join(packagedRoot, 'OrbitSSH.exe')
+  : process.execPath);
+const entry = process.env.ORBITSSH_MCP_ENTRY ?? (packaged
+  ? path.join(packagedRoot, 'resources', 'mcp', 'server.js')
+  : path.resolve('dist/mcp/server.js'));
 
 try {
   const transport = new StdioClientTransport({
-    command: process.execPath,
-    args: [path.resolve('dist/mcp/server.js')],
+    command,
+    args: [entry],
     cwd: process.cwd(),
     env: {
       ...process.env,
       AI_SSH_DATA_DIR: dataDir,
-      ORBITSSH_RUNTIME_ENDPOINT: runtimeEndpoint
+      ORBITSSH_RUNTIME_ENDPOINT: runtimeEndpoint,
+      ...(packaged || command.toLowerCase().endsWith('.exe') ? { ELECTRON_RUN_AS_NODE: '1' } : {})
     },
     stderr: 'inherit'
   });

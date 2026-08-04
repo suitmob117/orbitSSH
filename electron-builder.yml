@@ -1,0 +1,48 @@
+appId: com.orbitssh.desktop
+productName: OrbitSSH
+copyright: Copyright © 2026 OrbitSSH
+
+directories:
+  output: release
+  buildResources: build
+
+asar: true
+npmRebuild: false
+electronDist: node_modules/electron/dist
+
+files:
+  - out/**/*
+  - dist/runtime/**/*
+  - build/icon.ico
+  - build/icon.png
+  - package.json
+
+asarUnpack:
+  - node_modules/**/*.node
+
+extraResources:
+  - from: dist/mcp
+    to: mcp
+    filter:
+      - '**/*'
+
+win:
+  icon: build/icon.ico
+  executableName: OrbitSSH
+  target:
+    - target: nsis
+      arch:
+        - x64
+  artifactName: OrbitSSH-Setup-${version}-${arch}.${ext}
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowElevation: true
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: always
+  createStartMenuShortcut: true
+  shortcutName: OrbitSSH
+  uninstallDisplayName: OrbitSSH
+  deleteAppDataOnUninstall: false
+  language: '2052'

@@ -49,16 +49,18 @@ function isMissingRuntime(error: unknown): boolean {
 
 function startRuntimeProcess(endpoint: string): void {
   const entry = resolveRuntimeEntry();
+  const executable = resolveRuntimeExecutable(entry);
   const isTypescript = entry.endsWith('.ts');
   const args = isTypescript ? ['--import', 'tsx', entry] : [entry];
-  const child = spawn(process.execPath, args, {
+  const usesElectron = Boolean(process.versions.electron) || path.basename(executable).toLowerCase() === 'orbitssh.exe';
+  const child = spawn(executable, args, {
     detached: true,
     windowsHide: true,
     stdio: 'ignore',
     env: {
       ...process.env,
       ORBITSSH_RUNTIME_ENDPOINT: endpoint,
-      ...(process.versions.electron ? { ELECTRON_RUN_AS_NODE: '1' } : {})
+      ...(usesElectron ? { ELECTRON_RUN_AS_NODE: '1' } : {})
     }
   });
   child.unref();
@@ -76,6 +78,25 @@ function resolveRuntimeEntry(): string {
     path.join(process.resourcesPath ?? '', 'app.asar.unpacked', 'dist', 'runtime', 'host-entry.js')
   ];
   const entry = candidates.find((candidate) => candidate && existsSync(candidate));
-  if (!entry) throw new Error('找不到 OrbitSSH Runtime 启动文件');
-  return entry;
+  if (entry) return entry;
+
+  // 安装版 MCP 位于 resources/mcp，普通 Node 无法读取 ASAR 内部路径，
+  // 但可以把该路径交给同目录上层的 OrbitSSH Electron 可执行文件启动。
+  const resourcesDirectory = path.resolve(directory, '..');
+  const packagedArchive = path.join(resourcesDirectory, 'app.asar');
+  if (path.basename(directory).toLowerCase() === 'mcp' && existsSync(packagedArchive)) {
+    return path.join(packagedArchive, 'dist', 'runtime', 'host-entry.js');
+  }
+  throw new Error('找不到 OrbitSSH Runtime 启动文件');
+}
+
+function resolveRuntimeExecutable(entry: string): string {
+  if (process.versions.electron) return process.execPath;
+  const marker = `${path.sep}app.asar${path.sep}`;
+  const archiveIndex = entry.toLowerCase().lastIndexOf(marker.toLowerCase());
+  if (archiveIndex >= 0) {
+    const executable = path.resolve(entry.slice(0, archiveIndex), '..', 'OrbitSSH.exe');
+    if (existsSync(executable)) return executable;
+  }
+  return process.execPath;
 }

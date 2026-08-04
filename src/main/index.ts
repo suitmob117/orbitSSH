@@ -31,6 +31,7 @@ const TITLE_BAR_THEMES = {
   green: { color: '#070907', symbolColor: '#a8bea0', height: TITLE_BAR_HEIGHT }
 } satisfies Record<AppTheme, { color: string; symbolColor: string; height: number }>;
 app.setName('OrbitSSH');
+if (process.platform === 'win32') app.setAppUserModelId('com.orbitssh.desktop');
 
 let mainWindow: BrowserWindow | undefined;
 let runtime: RuntimeRpcClient | undefined;
@@ -280,6 +281,15 @@ function registerIpc(client: RuntimeRpcClient): void {
 
 app.whenReady().then(async () => {
   runtime = await connectRuntime({ kind: 'desktop' });
+  if (process.env.ORBITSSH_PACKAGED_SMOKE_TEST === '1') {
+    await runtime.call('profiles:list', {});
+    await runtime.call('runtime:set-exit-policy', { policy: 'close_all' });
+    await runtime.close();
+    runtime = undefined;
+    quitAllowed = true;
+    app.exit(0);
+    return;
+  }
   registerIpc(runtime);
   createWindow();
 

@@ -1,30 +1,33 @@
 # Codex MCP 本地接入指南
 
-本指南将开发目录中的 OrbitSSH MCP 服务接入 Codex。它适用于本机开发和验证；正式的 Plugin、Marketplace 或一键安装流程属于后续阶段。
+本指南将已安装的 OrbitSSH MCP 服务接入 Codex。安装版已经自带 MCP 与 Runtime，不需要保留源码目录，也不依赖系统单独安装 Node.js。
 
 ## 接入前准备
 
-请先在 OrbitSSH 开发目录构建生产产物：
-
-```powershell
-cd D:\Code\ai-ssh
-npm.cmd run build
-```
-
-生产入口的绝对路径为：
+先安装 `OrbitSSH-Setup-0.1.0-x64.exe`。默认安装目录通常为：
 
 ```text
-D:\Code\ai-ssh\dist\mcp\server.js
+%LOCALAPPDATA%\Programs\OrbitSSH
 ```
 
-不要将 `src/mcp/server.ts`、临时目录或旧的手工配置路径作为 Codex 的生产入口。
+如果安装时选择了其他目录，请在下面的命令中替换安装路径。OrbitSSH 的服务器配置、历史和主机信任不放在安装目录，而是继续保存在兼容数据目录：
+
+```text
+%APPDATA%\AI SSH
+```
+
+安装、覆盖升级和卸载都不会主动删除这个数据目录。
 
 ## 注册与检查
 
-构建成功后，执行以下命令注册本地 MCP 服务：
+关闭 OrbitSSH 中不再需要的会话后，在 PowerShell 中执行以下命令。显式设置 `CODEX_HOME` 可避免管理员进程把配置写入其他 Windows 用户：
 
 ```powershell
-codex mcp add orbitssh -- node D:\Code\ai-ssh\dist\mcp\server.js
+$env:CODEX_HOME = Join-Path $env:USERPROFILE '.codex'
+$orbitssh = Join-Path $env:LOCALAPPDATA 'Programs\OrbitSSH'
+codex mcp add orbitssh --env ELECTRON_RUN_AS_NODE=1 -- `
+  (Join-Path $orbitssh 'OrbitSSH.exe') `
+  (Join-Path $orbitssh 'resources\mcp\server.js')
 ```
 
 随后检查注册结果和当前可用的 MCP 服务：
@@ -34,7 +37,21 @@ codex mcp get orbitssh
 codex mcp list
 ```
 
-如果需要重新注册，先按 Codex CLI 的当前帮助移除或替换旧的 `ai_ssh` 条目，再注册新的 `orbitssh` 条目并重复上面的检查步骤。
+注册成功后完全退出并重新打开 Codex；已经打开的任务不会热加载新 MCP。若使用了自定义安装目录，只需修改 `$orbitssh` 的值。
+
+如果需要修复路径，先执行 `codex mcp remove orbitssh`，再重新运行上面的注册命令并检查。卸载 OrbitSSH 前可先执行 `codex mcp remove orbitssh`，避免 Codex 保留已经失效的启动路径。
+
+## 开发目录接入
+
+只有开发和调试源码时才使用下面的方式：
+
+```powershell
+cd D:\Code\ai-ssh
+npm.cmd run build
+codex mcp add orbitssh -- node D:\Code\ai-ssh\dist\mcp\server.js
+```
+
+不要将 `src/mcp/server.ts`、临时目录或旧工作树路径作为生产入口。
 
 ## 可用工具与审批
 
@@ -88,20 +105,21 @@ SQLite 以 WAL 模式运行；运行期间同目录可能出现 `ai-ssh.sqlite-w
 
 ## 构建与冒烟验证
 
-每次修改 MCP 相关内容后，可在开发目录依次运行：
+每次修改 MCP 或打包相关内容后，可在开发目录依次运行：
 
 ```powershell
 cd D:\Code\ai-ssh
 npm.cmd run build
 npm.cmd run mcp:smoke
+npm.cmd run build:windows
 ```
 
-`mcp:smoke` 会启动已构建的生产 stdio 服务 `dist/mcp/server.js`，并调用 `list_connection_profiles` 验证 MCP 协议链路。测试使用临时数据目录，不会读取或修改你的实际连接配置。
+`mcp:smoke` 会验证开发产物；`build:windows` 会生成安装包，并继续验证打包后的桌面端、Runtime、SQLite 和 MCP。测试使用临时数据目录，不会读取或修改你的实际连接配置。
 
 ## 常见故障
 
-- `codex mcp add` 找不到入口：先重新执行 `npm.cmd run build`，并确认 `D:\Code\ai-ssh\dist\mcp\server.js` 存在。
-- Codex 无法启动服务：使用 `codex mcp get orbitssh` 检查命令是否为 `node D:\Code\ai-ssh\dist\mcp\server.js`，然后重新注册。
+- `codex mcp add` 找不到入口：确认 `$orbitssh` 指向实际安装目录，且其中存在 `OrbitSSH.exe` 与 `resources\mcp\server.js`。
+- Codex 无法启动服务：使用 `codex mcp get orbitssh` 检查命令、两个绝对路径和 `ELECTRON_RUN_AS_NODE=1`，然后重新注册。
 - 冒烟验证失败：先执行 `npm.cmd run build`，再执行 `npm.cmd run mcp:smoke`；查看命令输出中的 Node.js 或依赖错误。
 - `auto_readonly` 下命令被拒绝：改用明确的单条只读检查命令，避免 `&&`、`|`、重定向和其他复合 Shell 语法；需要写入时改用经过人工审批的授权流程。
 - 看不到连接配置：先在 OrbitSSH 桌面应用中创建配置，并确认当前 Windows 用户可访问相应的 Windows 凭据管理器条目。
