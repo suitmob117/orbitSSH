@@ -45,3 +45,12 @@ test('Tab 补全和方向键等复杂编辑不生成可能错误的命令记录'
   tracker.consume('\x1b[A');
   assert.deepEqual(tracker.consume('\r'), [{ type: 'unsupported' }]);
 });
+
+test('backspace cannot erase remote prompt text when the local input buffer is empty', () => {
+  const tracker = new TerminalCommandTracker();
+
+  assert.deepEqual(tracker.consume('\x7f'), []);
+  tracker.consume('pwd');
+  tracker.consume('\x7f');
+  assert.deepEqual(tracker.consume('\r'), [{ type: 'submit', command: 'pw' }]);
+});

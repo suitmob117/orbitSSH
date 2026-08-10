@@ -64,8 +64,12 @@ export class TerminalCommandTracker {
       }
 
       if (character === '\b' || character === '\x7f') {
-        this.command = [...this.command].slice(0, -1).join('');
-        echoBuffer += character;
+        // Queue mode echoes input locally. Never let backspace escape the
+        // current input buffer and move into remote prompt/output text.
+        if (this.command.length > 0) {
+          this.command = [...this.command].slice(0, -1).join('');
+          echoBuffer += character;
+        }
         continue;
       }
 

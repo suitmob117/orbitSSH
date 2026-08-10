@@ -257,16 +257,20 @@ export function ServerSidebar({
 function TerminalPanel({
   session,
   active,
+  codexPaused,
   onCommandRecorded
 }: {
   session: ConnectionSession;
   active: boolean;
+  codexPaused: boolean;
   onCommandRecorded: (record: CommandRecord) => void;
 }): JSX.Element {
   const containerRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<Terminal>();
   const fitAddonRef = useRef<FitAddon>();
   const terminalIdRef = useRef<string>();
+  const codexPausedRef = useRef(codexPaused);
+  codexPausedRef.current = codexPaused;
 
   const terminalTheme = () => {
     if (document.documentElement.classList.contains('green')) {
@@ -310,6 +314,14 @@ function TerminalPanel({
       if (replay) terminal.write(replay);
       const tracker = new TerminalCommandTracker();
       terminal.onData((data) => {
+        if (codexPausedRef.current) {
+          // Full takeover sends raw keyboard input to the remote PTY so the
+          // shell owns completion, history, Ctrl-R and interactive programs.
+          void window.aiSsh.writeTerminal(session.id, terminalId, data).catch((error: unknown) => {
+            terminal.writeln(`\r\n终端输入未发送：${error instanceof Error ? error.message : String(error)}`);
+          });
+          return;
+        }
         const actions = tracker.consume(data);
         for (const action of actions) {
           if (action.type === 'echo') {
@@ -514,7 +526,7 @@ export function CenterWorkbench({
         <WorkspaceTabs view={view} onChange={onViewChange} />
         <div className={cn('terminal-workspace', view !== 'terminal' && 'is-hidden')}>
           {sessions.map((item) => (
-            <TerminalPanel key={item.id} session={item} active={view === 'terminal' && session?.id === item.id} onCommandRecorded={onCommandRecorded} />
+            <TerminalPanel key={item.id} session={item} active={view === 'terminal' && session?.id === item.id} codexPaused={codexPaused} onCommandRecorded={onCommandRecorded} />
           ))}
           {!session ? <EmptyTerminal /> : null}
         </div>
