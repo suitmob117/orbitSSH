@@ -292,5 +292,7 @@ export interface AiSshApi {
   isCodexPaused(sessionId: string): Promise<boolean>;
   setSessionAuthorization(change: SessionAuthorizationChange): Promise<ConnectionSession>;
   onCodrivingAction(callback: (action: CodrivingAction) => void): () => void;
+  getApprovalAttentionCount(): Promise<number>;
+  onApprovalAttention(callback: (count: number) => void): () => void;
   onSessionUpdated(callback: (session: ConnectionSession) => void): () => void;
 }

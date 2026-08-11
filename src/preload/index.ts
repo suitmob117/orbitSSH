@@ -50,10 +50,16 @@ const api: AiSshApi = {
   resumeCodex: (sessionId: string) => ipcRenderer.invoke('codriving:resume', sessionId),
   isCodexPaused: (sessionId: string) => ipcRenderer.invoke('codriving:paused', sessionId),
   setSessionAuthorization: (change) => ipcRenderer.invoke('codriving:set-authorization', change),
+  getApprovalAttentionCount: () => ipcRenderer.invoke('approval:attention:get'),
   onCodrivingAction: (callback) => {
     const listener = (_event: Electron.IpcRendererEvent, action: Parameters<typeof callback>[0]) => callback(action);
     ipcRenderer.on('codriving:action-updated', listener);
     return () => ipcRenderer.off('codriving:action-updated', listener);
+  },
+  onApprovalAttention: (callback) => {
+    const listener = (_event: Electron.IpcRendererEvent, count: number) => callback(count);
+    ipcRenderer.on('approval:attention', listener);
+    return () => ipcRenderer.off('approval:attention', listener);
   },
   onSessionUpdated: (callback) => {
     const listener = (_event: Electron.IpcRendererEvent, session: Parameters<typeof callback>[0]) => callback(session);

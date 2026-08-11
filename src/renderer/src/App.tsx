@@ -80,6 +80,7 @@ export function App(): JSX.Element {
   const [history, setHistory] = useState<CommandRecord[]>([]);
   const [hostKeyChallenges, setHostKeyChallenges] = useState<HostKeyTrustChallenge[]>([]);
   const [codrivingActions, setCodrivingActions] = useState<CodrivingAction[]>([]);
+  const [pendingApprovalCount, setPendingApprovalCount] = useState(0);
   const [codexPaused, setCodexPaused] = useState(false);
   const [selectedProfileId, setSelectedProfileId] = useState<string>();
   const [editingId, setEditingId] = useState<string>();
@@ -134,6 +135,12 @@ export function App(): JSX.Element {
 
   useEffect(() => {
     void refresh();
+  }, []);
+
+  useEffect(() => {
+    const unsubscribe = window.aiSsh.onApprovalAttention(setPendingApprovalCount);
+    void window.aiSsh.getApprovalAttentionCount().then(setPendingApprovalCount).catch(() => undefined);
+    return unsubscribe;
   }, []);
 
   useEffect(() => {
@@ -453,6 +460,7 @@ export function App(): JSX.Element {
       </div>
       <AppTopbar
         profileName={selectedProfile?.name}
+        pendingApprovalCount={pendingApprovalCount}
         themePreference={themePreference}
         onThemeChange={setThemePreference}
       />

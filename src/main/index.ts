@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, nativeImage } from 'electron';
 import { existsSync } from 'node:fs';
 import { readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -37,6 +37,42 @@ let mainWindow: BrowserWindow | undefined;
 let runtime: RuntimeRpcClient | undefined;
 let quitInProgress = false;
 let quitAllowed = false;
+const pendingApprovalIds = new Set<string>();
+const approvalOverlayIcon = nativeImage.createFromDataURL(
+  `data:image/svg+xml;base64,${Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32"><circle cx="16" cy="16" r="13" fill="#dc2626"/><path d="M16 8v10M16 23v1" stroke="#fff" stroke-width="3" stroke-linecap="round"/></svg>').toString('base64')}`
+);
+
+function updateApprovalAttention(): void {
+  const count = pendingApprovalIds.size;
+  if (process.platform === 'win32') {
+    mainWindow?.setOverlayIcon(count > 0 ? approvalOverlayIcon : null, count > 0 ? '有操作等待审批' : '');
+    mainWindow?.flashFrame(count > 0);
+  } else if (process.platform === 'darwin' && app.dock) {
+    app.dock.setBadge(count > 0 ? String(count) : '');
+  } else if (typeof app.setBadgeCount === 'function') {
+    app.setBadgeCount(count);
+  }
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('approval:attention', count);
+  }
+}
+
+async function syncPendingApprovalAttention(client: RuntimeRpcClient): Promise<void> {
+  try {
+    const sessions = await client.call<ConnectionSession[]>('sessions:list', {});
+    const actions = await Promise.all(sessions.map((session) =>
+      client.call<CodrivingAction[]>('codriving:events', { sessionId: session.id })
+    ));
+    pendingApprovalIds.clear();
+    for (const action of actions.flat()) {
+      if (action.status === 'pending_approval') pendingApprovalIds.add(action.id);
+    }
+    updateApprovalAttention();
+  } catch {
+    // Live action updates will still populate the attention state if the
+    // initial snapshot is temporarily unavailable.
+  }
+}
 
 function resolvePreloadPath(): string {
   const candidates = [path.join(__dirname, '../preload/index.mjs'), path.join(__dirname, '../preload/index.js')];
@@ -66,6 +102,11 @@ function createWindow(): BrowserWindow {
     }
   });
   mainWindow = window;
+  window.on('focus', () => window.flashFrame(false));
+  window.on('closed', () => {
+    if (mainWindow === window) mainWindow = undefined;
+  });
+  updateApprovalAttention();
   window.webContents.setZoomFactor(APP_ZOOM_FACTOR);
 
   if (process.env.ELECTRON_RENDERER_URL) {
@@ -218,6 +259,10 @@ function registerIpc(client: RuntimeRpcClient): void {
     };
   });
   ipcMain.handle('sessions:list', () => client.call<ConnectionSession[]>('sessions:list', {}));
+  ipcMain.handle('approval:attention:get', async () => {
+    await syncPendingApprovalAttention(client);
+    return pendingApprovalIds.size;
+  });
   ipcMain.handle('sessions:open', (_event, profileId: string, authorizationLevel) =>
     client.call<ConnectionSession>('sessions:open', { profileId, authorizationLevel })
   );
@@ -309,6 +354,9 @@ function registerIpc(client: RuntimeRpcClient): void {
     mainWindow?.webContents.send('terminal:data', chunk);
   });
   client.on('codriving:action-updated', (action: CodrivingAction) => {
+    if (action.status === 'pending_approval') pendingApprovalIds.add(action.id);
+    else pendingApprovalIds.delete(action.id);
+    updateApprovalAttention();
     mainWindow?.webContents.send('codriving:action-updated', action);
   });
   client.on('session:updated', (session: ConnectionSession) => {
@@ -321,6 +369,7 @@ app.whenReady().then(async () => {
   if (process.env.ORBITSSH_PACKAGED_SMOKE_TEST === '1') {
     registerIpc(runtime);
     const smokeWindow = createWindow();
+    void syncPendingApprovalAttention(runtime);
     await verifyPackagedRenderer(smokeWindow);
     const screenshotPath = process.env.ORBITSSH_PACKAGED_SMOKE_SCREENSHOT;
     if (screenshotPath) {
@@ -338,6 +387,7 @@ app.whenReady().then(async () => {
   }
   registerIpc(runtime);
   createWindow();
+  void syncPendingApprovalAttention(runtime);
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {

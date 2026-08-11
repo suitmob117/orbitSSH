@@ -1,9 +1,43 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { takeRecentChronological } from '../src/renderer/src/lib/activity';
+import type { CodrivingAction } from '../src/shared/types';
+import { prioritizeCodrivingActions, takeRecentChronological } from '../src/renderer/src/lib/activity';
+
+function action(sequence: number, status: CodrivingAction['status']): CodrivingAction {
+  return {
+    id: `action-${sequence}`,
+    sequence,
+    digest: `digest-${sequence}`,
+    sessionId: 'session-1',
+    actor: 'codex',
+    kind: 'command',
+    status,
+    risk: 'write',
+    summary: `command-${sequence}`,
+    reason: 'test',
+    createdAt: `2026-08-10T00:00:0${sequence}.000Z`,
+    updatedAt: `2026-08-10T00:00:0${sequence}.000Z`
+  };
+}
 
 test('轨迹记录按时间正序显示，最新项位于底部', () => {
   assert.deepEqual(takeRecentChronological([1, 2, 3, 4], 3), [2, 3, 4]);
+});
+
+test('pending approvals stay at the top and are not dropped by the recent-item limit', () => {
+  const sorted = prioritizeCodrivingActions([
+    action(1, 'pending_approval'),
+    action(2, 'completed'),
+    action(3, 'completed'),
+    action(4, 'completed'),
+    action(5, 'completed'),
+    action(6, 'completed'),
+    action(7, 'completed'),
+    action(8, 'running')
+  ], 6);
+
+  assert.deepEqual(sorted.map((item) => item.sequence), [1, 8, 4, 5, 6, 7]);
+  assert.equal(sorted[0]?.status, 'pending_approval');
 });
 import type { CommandRecord } from '../src/shared/types';
 import { getCommandActivityState } from '../src/renderer/src/lib/activity';

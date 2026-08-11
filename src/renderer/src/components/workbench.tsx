@@ -43,8 +43,9 @@ import type {
 import { Button, DangerButton, Input, Label, SecondaryButton, Select } from './ui';
 import { SessionHeader } from './session-header';
 import { cn } from '../lib/utils';
-import { getCommandActivityState, takeRecentChronological } from '../lib/activity';
+import { getCommandActivityState, prioritizeCodrivingActions, takeRecentChronological } from '../lib/activity';
 import { formatTerminalEcho, TerminalCommandTracker } from '../lib/terminal-command-tracker';
+import { highlightServerPrompt } from '../lib/terminal-output';
 import {
   formatFileSize,
   getRemoteParent,
@@ -120,10 +121,12 @@ function ThemeButton({
 
 export function AppTopbar({
   profileName,
+  pendingApprovalCount,
   themePreference,
   onThemeChange
 }: {
   profileName?: string;
+  pendingApprovalCount: number;
   themePreference: ThemePreference;
   onThemeChange: (value: ThemePreference) => void;
 }): JSX.Element {
@@ -145,6 +148,13 @@ export function AppTopbar({
         <b>{profileName ?? '新建连接'}</b>
       </div>
       <div className="workbench-top-actions">
+        {pendingApprovalCount > 0 ? (
+          <span className="approval-attention" role="status" aria-live="polite" title="有操作等待审批">
+            <i aria-hidden="true" />
+            <span>待审批</span>
+            <b>{pendingApprovalCount}</b>
+          </span>
+        ) : null}
         <span className="mcp-ready"><i />本地 MCP 已就绪</span>
         <ThemeButton active={themePreference === 'system'} label="跟随系统" onClick={() => onThemeChange('system')}>
           <Monitor />
@@ -301,9 +311,12 @@ function TerminalPanel({
     terminal.writeln('\x1b[38;2;98;238;224m正在打开共享共驾终端…\x1b[0m');
     terminal.writeln('\x1b[38;2;226;153;62m提示：你和 Codex 的普通命令会按提交顺序执行；需要独占终端时，请打开会话头的“完全接管”开关。\x1b[0m');
     terminalRef.current = terminal;
+    const writeRemoteOutput = (data: string): void => {
+      terminal.write(highlightServerPrompt(data));
+    };
     let disposed = false;
     const unsubscribe = window.aiSsh.onTerminalData((chunk) => {
-      if (chunk.terminalId === terminalIdRef.current) terminal.write(chunk.data);
+      if (chunk.terminalId === terminalIdRef.current) writeRemoteOutput(chunk.data);
     });
     void window.aiSsh.openTerminal(session.id).then(({ terminalId, replay }) => {
       if (disposed) {
@@ -311,7 +324,7 @@ function TerminalPanel({
         return;
       }
       terminalIdRef.current = terminalId;
-      if (replay) terminal.write(replay);
+      if (replay) writeRemoteOutput(replay);
       const tracker = new TerminalCommandTracker();
       terminal.onData((data) => {
         if (codexPausedRef.current) {
@@ -557,11 +570,11 @@ function ActivityTimeline({
   onReject: (action: CodrivingAction) => void;
 }): JSX.Element {
   const records = takeRecentChronological(history, 3);
-  const recentActions = takeRecentChronological(actions, 6);
+  const recentActions = prioritizeCodrivingActions(actions, 6);
   return (
     <div className={cn('activity-timeline', (session || recentActions.some((action) => action.status === 'queued' || action.status === 'running' || action.status === 'pending_approval')) && 'has-live')}>
       {session ? (
-        <div className="activity-event is-live is-normal">
+        <div className="activity-event activity-session-event is-live is-normal">
           <i />
           <div className="activity-event-flags"><span className="activity-phase">进行中</span><time>{formatTime(session.openedAt)}</time></div>
           <strong>SSH 会话运行中</strong>
