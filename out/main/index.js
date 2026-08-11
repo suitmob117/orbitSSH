@@ -210,6 +210,29 @@ const profileExportDocumentSchema = z.object({
     });
   }
 });
+function createAppExitFlow(options) {
+  let prompting = false;
+  let quitAllowed = false;
+  const interceptExit = (event) => {
+    if (quitAllowed || !options.hasRuntime()) return;
+    event.preventDefault();
+    if (prompting) return;
+    prompting = true;
+    void options.choosePolicy().then(async (confirmed) => {
+      if (!confirmed) return;
+      await options.closeRuntime();
+      quitAllowed = true;
+      options.allowQuit();
+      options.quit();
+    }).catch(options.reportError).finally(() => {
+      prompting = false;
+    });
+  };
+  return {
+    onWindowClose: interceptExit,
+    onBeforeQuit: interceptExit
+  };
+}
 function resolveRuntimeEndpoint() {
   if (process.env.ORBITSSH_RUNTIME_ENDPOINT) return process.env.ORBITSSH_RUNTIME_ENDPOINT;
   const identity = `${os.homedir()}\0${os.userInfo().username}`;
@@ -455,8 +478,6 @@ app.setName("OrbitSSH");
 if (process.platform === "win32") app.setAppUserModelId("com.orbitssh.desktop");
 let mainWindow;
 let runtime;
-let quitInProgress = false;
-let quitAllowed = false;
 const pendingApprovalIds = /* @__PURE__ */ new Set();
 const approvalOverlayIcon = nativeImage.createFromDataURL(
   `data:image/svg+xml;base64,${Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32"><circle cx="16" cy="16" r="13" fill="#dc2626"/><path d="M16 8v10M16 23v1" stroke="#fff" stroke-width="3" stroke-linecap="round"/></svg>').toString("base64")}`
@@ -475,6 +496,20 @@ function updateApprovalAttention() {
     mainWindow.webContents.send("approval:attention", count);
   }
 }
+const appExitFlow = createAppExitFlow({
+  hasRuntime: () => Boolean(runtime),
+  choosePolicy: async () => runtime ? chooseRuntimeExitPolicy(runtime) : true,
+  closeRuntime: async () => {
+    await runtime?.close();
+  },
+  allowQuit: () => {
+    runtime = void 0;
+  },
+  quit: () => app.quit(),
+  reportError: (error) => {
+    void dialog.showErrorBox("鍏抽棴 OrbitSSH 澶辫触", error instanceof Error ? error.message : String(error));
+  }
+});
 async function syncPendingApprovalAttention(client) {
   try {
     const sessions = await client.call("sessions:list", {});
@@ -514,6 +549,7 @@ function createWindow() {
     }
   });
   mainWindow = window;
+  window.on("close", appExitFlow.onWindowClose);
   window.on("focus", () => window.flashFrame(false));
   window.on("closed", () => {
     if (mainWindow === window) mainWindow = void 0;
@@ -783,7 +819,6 @@ app.whenReady().then(async () => {
     smokeWindow.destroy();
     await runtime.close();
     runtime = void 0;
-    quitAllowed = true;
     app.exit(0);
     return;
   }
@@ -799,21 +834,7 @@ app.whenReady().then(async () => {
   await dialog.showErrorBox("OrbitSSH 启动失败", error instanceof Error ? error.message : String(error));
   app.exit(1);
 });
-app.on("before-quit", (event) => {
-  if (quitAllowed || !runtime) return;
-  event.preventDefault();
-  if (quitInProgress) return;
-  quitInProgress = true;
-  void chooseRuntimeExitPolicy(runtime).then(async (confirmed) => {
-    if (!confirmed) return;
-    await runtime?.close();
-    runtime = void 0;
-    quitAllowed = true;
-    app.quit();
-  }).finally(() => {
-    quitInProgress = false;
-  });
-});
+app.on("before-quit", appExitFlow.onBeforeQuit);
 async function chooseRuntimeExitPolicy(client) {
   const sessions = await client.call("sessions:list", {});
   if (sessions.length === 0) {
