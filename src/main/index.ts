@@ -34,6 +34,23 @@ const TITLE_BAR_THEMES = {
 app.setName('OrbitSSH');
 if (process.platform === 'win32') app.setAppUserModelId('com.orbitssh.desktop');
 
+// 兜底：捕获任何漏网的未处理异常/拒绝，记录到日志而非触发 Electron 默认的
+// 「主进程 JavaScript 错误」白色弹窗。正常路径下错误应已在 RPC 客户端侧被
+// reject 并内联展示到终端；这里只为防止极端情况下再弹出 JS 白框。
+function reportRuntimeError(source: string, error: unknown): void {
+  const message = error instanceof Error ? error.stack || error.message : String(error);
+  try {
+    console.error(`[OrbitSSH][${source}] ${new Date().toISOString()}\n${message}`);
+  } catch {
+    // 日志通道不可用时静默，绝不向上传播导致默认弹窗
+  }
+}
+process.on('uncaughtException', (error) => reportRuntimeError('uncaughtException', error));
+process.on('unhandledRejection', (reason) => reportRuntimeError('unhandledRejection', reason));
+app.on('render-process-gone', (_event, _webContents, details) => {
+  reportRuntimeError('render-process-gone', new Error(`renderer exited (${details.reason}: ${details.exitCode})`));
+});
+
 let mainWindow: BrowserWindow | undefined;
 let runtime: RuntimeRpcClient | undefined;
 const pendingApprovalIds = new Set<string>();

@@ -4,7 +4,7 @@ import net, { type Server, type Socket } from 'node:net';
 
 import type { RuntimeClientKind } from './runtime-lifetime';
 
-const MAX_FRAME_BYTES = 1024 * 1024;
+const MAX_FRAME_BYTES = 16 * 1024 * 1024;
 
 type RpcRequest = { type: 'request'; id: string; method: string; params: unknown };
 type RpcResponse = { type: 'response'; id: string; ok: true; result: unknown } | {
@@ -216,6 +216,18 @@ export class RuntimeRpcClient extends EventEmitter {
     });
   }
 
+  // 连接层出现不可恢复错误（如超大帧解析失败）时的统一收口：
+  // 用「具体」错误 reject 所有在途 RPC，让调用方拿到可展示的原因（而非在 close 里收到
+  // 泛化的「连接已关闭」），随后由 socket 销毁触发既有 close 逻辑做清理。
+  // 刻意不用 this.emit('error')：握手完成后客户端已无 error 监听者，
+  // Node 的 EventEmitter 在 emit('error') 无监听者时会同步抛出，
+  // 从而触发 Electron 的「主进程 JavaScript 错误」白屏弹窗。
+  private fail(error: Error): void {
+    for (const pending of this.pending.values()) pending.reject(error);
+    this.pending.clear();
+    try { console.warn('[OrbitSSH Runtime] 连接异常：', error.message); } catch { /* ignore */ }
+  }
+
   private receive(chunk: string): void {
     this.buffer += chunk;
     try {
@@ -235,7 +247,7 @@ export class RuntimeRpcClient extends EventEmitter {
         }
       }
     } catch (error) {
-      this.emit('error', error);
+      this.fail(error instanceof Error ? error : new Error(String(error)));
       this.socket.destroy();
     }
   }

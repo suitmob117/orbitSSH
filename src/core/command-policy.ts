@@ -48,7 +48,7 @@ const READONLY_EXECUTABLES = new Set([
 const COMPLEX_SHELL_SYNTAX = /(?:\r|\n|&|\|\||[;|<>`]|\$\()/;
 const COMMON_EXECUTABLE_PATH = /^\/(?:usr\/)?s?bin\/([^/]+)$/i;
 const ENVIRONMENT_ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*\+?=/;
-const MAX_COMMAND_LENGTH = 32_768;
+const MAX_COMMAND_LENGTH = 256_000;
 const MAX_WRAPPER_DEPTH = 32;
 const COMMAND_OPTIONS_WITH_VALUE = new Set<string>();
 const SUDO_OPTIONS_WITH_VALUE = new Set([

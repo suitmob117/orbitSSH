@@ -35,7 +35,7 @@ const terminalWriteSchema = z.object({ sessionId: idSchema, terminalId: idSchema
 const terminalSubmitSchema = z.object({
   sessionId: idSchema,
   terminalId: idSchema,
-  command: z.string().trim().min(1).max(32_768)
+  command: z.string().trim().min(1).max(256_000)
 }).strict();
 const actionListSchema = z.object({ sessionId: idSchema, afterSequence: z.number().int().min(0).optional() }).strict();
 const exitPolicySchema = z.object({
