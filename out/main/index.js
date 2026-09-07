@@ -239,7 +239,7 @@ function resolveRuntimeEndpoint() {
   const suffix = createHash("sha256").update(identity).digest("hex").slice(0, 16);
   return process.platform === "win32" ? `\\\\.\\pipe\\orbitssh-runtime-${suffix}` : path.join(os.tmpdir(), `orbitssh-runtime-${suffix}.sock`);
 }
-const MAX_FRAME_BYTES = 1024 * 1024;
+const MAX_FRAME_BYTES = 16 * 1024 * 1024;
 function encode(frame) {
   return `${JSON.stringify(frame)}
 `;
@@ -327,6 +327,20 @@ class RuntimeRpcClient extends EventEmitter {
       this.socket.end();
     });
   }
+  // 连接层出现不可恢复错误（如超大帧解析失败）时的统一收口：
+  // 用「具体」错误 reject 所有在途 RPC，让调用方拿到可展示的原因（而非在 close 里收到
+  // 泛化的「连接已关闭」），随后由 socket 销毁触发既有 close 逻辑做清理。
+  // 刻意不用 this.emit('error')：握手完成后客户端已无 error 监听者，
+  // Node 的 EventEmitter 在 emit('error') 无监听者时会同步抛出，
+  // 从而触发 Electron 的「主进程 JavaScript 错误」白屏弹窗。
+  fail(error) {
+    for (const pending of this.pending.values()) pending.reject(error);
+    this.pending.clear();
+    try {
+      console.warn("[OrbitSSH Runtime] 连接异常：", error.message);
+    } catch {
+    }
+  }
   receive(chunk) {
     this.buffer += chunk;
     try {
@@ -346,7 +360,7 @@ class RuntimeRpcClient extends EventEmitter {
         }
       }
     } catch (error) {
-      this.emit("error", error);
+      this.fail(error instanceof Error ? error : new Error(String(error)));
       this.socket.destroy();
     }
   }
@@ -476,6 +490,24 @@ const TITLE_BAR_THEMES = {
 };
 app.setName("OrbitSSH");
 if (process.platform === "win32") app.setAppUserModelId("com.orbitssh.desktop");
+if (process.env.ORBITSSH_PACKAGED_SMOKE_TEST === "1") {
+  app.disableHardwareAcceleration();
+  app.commandLine.appendSwitch("disable-gpu");
+  app.commandLine.appendSwitch("disable-software-rasterizer");
+}
+function reportRuntimeError(source, error) {
+  const message = error instanceof Error ? error.stack || error.message : String(error);
+  try {
+    console.error(`[OrbitSSH][${source}] ${(/* @__PURE__ */ new Date()).toISOString()}
+${message}`);
+  } catch {
+  }
+}
+process.on("uncaughtException", (error) => reportRuntimeError("uncaughtException", error));
+process.on("unhandledRejection", (reason) => reportRuntimeError("unhandledRejection", reason));
+app.on("render-process-gone", (_event, _webContents, details) => {
+  reportRuntimeError("render-process-gone", new Error(`renderer exited (${details.reason}: ${details.exitCode})`));
+});
 let mainWindow;
 let runtime;
 const pendingApprovalIds = /* @__PURE__ */ new Set();

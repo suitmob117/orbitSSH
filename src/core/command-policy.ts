@@ -43,7 +43,18 @@ const READONLY_EXECUTABLES = new Set([
   'whoami',
   'id',
   'uname',
-  'uptime'
+  'uptime',
+  'wc',
+  'sort',
+  'uniq',
+  'xargs',
+  'echo',
+  'printf',
+  'ss',
+  'netstat',
+  'hostname',
+  'dig',
+  'nslookup'
 ]);
 const COMPLEX_SHELL_SYNTAX = /(?:\r|\n|&|\|\||[;|<>`]|\$\()/;
 const COMMON_EXECUTABLE_PATH = /^\/(?:usr\/)?s?bin\/([^/]+)$/i;
@@ -298,6 +309,27 @@ function isReadonlyCommand(command: string): boolean {
   if (executable === 'systemctl') {
     return systemctlCommand(args)?.executable === 'status';
   }
+  if (executable === 'docker') {
+    return isDockerReadonly(args);
+  }
+  if (executable === 'caddy') {
+    return args[0] === 'validate' || args[0] === 'version' || args[0] === 'list-modules';
+  }
+  return false;
+}
+
+function isDockerReadonly(args: string[]): boolean {
+  if (args.length === 0) return false;
+  const sub = args[0];
+  const readonlyDockerSubcommands = new Set([
+    'ps', 'images', 'inspect', 'logs', 'stats', 'top', 'port', 'events', 'history'
+  ]);
+  if (readonlyDockerSubcommands.has(sub)) return true;
+  if (sub === 'compose') {
+    const composeSub = args[1];
+    return composeSub === 'ps' || composeSub === 'logs' || composeSub === 'images'
+      || composeSub === 'config' || composeSub === 'version';
+  }
   return false;
 }
 
@@ -401,6 +433,8 @@ function isWriteRiskCommand(command: string, shellDepth = 0): boolean {
   });
 }
 
+const RISK_LEVEL: Record<CommandRisk, number> = { readonly: 0, write: 1, high: 2 };
+
 export function assessCommand(command: string): CommandAssessment {
   const trimmed = command.trim();
   if (trimmed.length > MAX_COMMAND_LENGTH) {
@@ -412,14 +446,22 @@ export function assessCommand(command: string): CommandAssessment {
   if (isHighRiskCommand(trimmed)) {
     return { risk: 'high', reason: '命令可能影响系统、用户、磁盘或 SSH 访问' };
   }
-  if (COMPLEX_SHELL_SYNTAX.test(trimmed)) {
-    return { risk: 'write', reason: '复合 Shell 语法不能自动确认为只读操作' };
-  }
   if (isWriteRiskCommand(trimmed)) {
     return { risk: 'write', reason: '命令可能修改远程服务器状态' };
   }
+  // 命令替换可隐藏任意写操作，复合语法无法安全确认为只读。
+  if (COMPLEX_SHELL_SYNTAX.test(trimmed)) {
+    // 例外：纯管道/分号复合且每一段都是已知只读命令时，允许归类为只读。
+    if (!/\$\(|`|>|<|&/.test(trimmed)) {
+      const segments = splitShellSegments(trimmed).filter((s) => s.trim());
+      if (segments.length > 1 && segments.every((s) => isReadonlyCommand(s.trim()))) {
+        return { risk: 'readonly', reason: '复合命令的每一段均为已知只读操作' };
+      }
+    }
+    return { risk: 'write', reason: '复合 Shell 语法不能自动确认为只读操作' };
+  }
   if (isReadonlyCommand(trimmed)) {
-    return { risk: 'readonly', reason: '命令属于明确的单条只读检查' };
+    return { risk: 'readonly', reason: '命令属于明确的只读检查' };
   }
   return { risk: 'write', reason: '无法确认命令只读，按写操作处理' };
 }

@@ -7,6 +7,7 @@
   "author": "OrbitSSH",
   "main": "out/main/index.js",
   "scripts": {
+    "postinstall": "electron-builder install-app-deps",
     "predev": "npm run rebuild:electron",
     "dev": "electron-vite dev",
     "build:code": "tsc --noEmit && electron-vite build && tsup --config tsup.mcp.config.ts && tsup src/runtime/host-entry.ts --format esm --platform node --target node22 --out-dir dist/runtime --external @napi-rs/keyring --external better-sqlite3 --external better-sqlite3-electron --external ssh2 --external zod",

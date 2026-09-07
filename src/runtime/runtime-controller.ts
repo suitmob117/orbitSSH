@@ -23,7 +23,8 @@ const idSchema = z.string().min(1);
 const sessionRequestSchema = z.object({ sessionId: idSchema }).strict();
 const openSessionSchema = z.object({
   profileId: idSchema,
-  authorizationLevel: authorizationLevelSchema.optional()
+  authorizationLevel: authorizationLevelSchema.optional(),
+  forceNew: z.boolean().optional()
 }).strict();
 const commandRequestSchema = z.object({
   sessionId: idSchema,
@@ -46,8 +47,10 @@ const MCP_METHODS = new Set([
   'profiles:list',
   'sessions:list',
   'sessions:open',
+  'sessions:close',
   'sessions:health',
   'commands:request',
+  'commands:cancel',
   'history:list',
   'files:request',
   'files:list-remote',
@@ -163,6 +166,15 @@ export class RuntimeController {
         const input = openSessionSchema.parse(params);
         // MCP 无权选择或提升共驾授权；新会话使用安全默认值，已有会话保留桌面端设置。
         const authorizationLevel = context.kind === 'desktop' ? input.authorizationLevel : undefined;
+        if (input.forceNew) {
+          const existing = this.services.sessionManager.listSessions()
+            .find((s) => s.profileId === input.profileId && s.health !== 'disconnected');
+          if (existing) {
+            await this.services.sessionManager.closeSession(existing.id);
+            this.lifetime.removeSession(existing.id);
+            this.options.emit?.('session:closed', { sessionId: existing.id });
+          }
+        }
         let session = await this.services.sessionManager.openSession(input.profileId, authorizationLevel);
         if (context.kind === 'desktop' && input.authorizationLevel) {
           session = this.coordinator.setAuthorizationLevel({
@@ -203,7 +215,11 @@ export class RuntimeController {
           sessionId: input.sessionId,
           actor: context.kind === 'mcp' ? 'codex' : 'user',
           command: input.command
-        }));
+        }, { useTerminal: context.kind === 'desktop' }));
+      }
+      case 'commands:cancel': {
+        const { sessionId } = sessionRequestSchema.parse(params);
+        return this.coordinator.cancelCommand(sessionId);
       }
       case 'history:list': {
         const input = z.object({ sessionId: idSchema.optional() }).strict().parse(params);

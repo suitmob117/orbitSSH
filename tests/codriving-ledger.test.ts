@@ -58,6 +58,30 @@ class LedgerExecutionPort implements CodrivingExecutionPort {
     };
   }
 
+  async runCommand(_sessionId: string, command: string): Promise<CommandResult> {
+    if (!this.allowExecution) throw new Error('测试不应执行未恢复的待审批命令');
+    this.commands.push(command);
+    return {
+      record: {
+        id: 'record-ledger',
+        sessionId: this.session.id,
+        command,
+        startedAt: '2026-07-24T08:00:00.000Z',
+        finishedAt: '2026-07-24T08:00:01.000Z',
+        exitCode: 0,
+        stdoutTail: '',
+        stderrTail: '',
+        summary: '完成'
+      },
+      stdout: '',
+      stderr: ''
+    };
+  }
+
+  async cancelCommand(_sessionId: string): Promise<{ cancelled: boolean }> {
+    return { cancelled: true };
+  }
+
   async executeFileTransfer(_request: FileTransferRequest): Promise<FileTransferResult> {
     throw new Error('测试不应执行文件传输');
   }

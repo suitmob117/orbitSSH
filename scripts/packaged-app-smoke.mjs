@@ -15,6 +15,22 @@ const endpoint = process.platform === 'win32'
   ? `\\\\.\\pipe\\orbitssh-packaged-smoke-${process.pid}`
   : path.join(dataDir, 'runtime.sock');
 
+async function terminateProcessTree(child) {
+  if (!child.pid || child.exitCode !== null) return;
+  if (process.platform !== 'win32') {
+    child.kill('SIGKILL');
+    return;
+  }
+  await new Promise((resolve) => {
+    const taskkill = spawn('taskkill', ['/pid', String(child.pid), '/t', '/f'], {
+      stdio: 'ignore',
+      windowsHide: true
+    });
+    taskkill.once('error', resolve);
+    taskkill.once('close', resolve);
+  });
+}
+
 try {
   const exitCode = await new Promise((resolve, reject) => {
     const child = spawn(executable, [], {
@@ -29,9 +45,11 @@ try {
       stdio: ['ignore', 'pipe', 'pipe']
     });
     let stderr = '';
+    let timedOut = false;
     child.stderr.on('data', (chunk) => { stderr += chunk.toString(); });
-    const timeout = setTimeout(() => {
-      child.kill();
+    const timeout = setTimeout(async () => {
+      timedOut = true;
+      await terminateProcessTree(child);
       reject(new Error('打包应用启动验证超时'));
     }, 20_000);
     child.once('error', (error) => {
@@ -40,6 +58,7 @@ try {
     });
     child.once('exit', (code) => {
       clearTimeout(timeout);
+      if (timedOut) return;
       if (code !== 0 && stderr) process.stderr.write(stderr);
       resolve(code);
     });

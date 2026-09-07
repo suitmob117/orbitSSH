@@ -36,8 +36,11 @@ function safeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-function parseFrames(buffer: string): { frames: RpcFrame[]; rest: string } {
-  if (Buffer.byteLength(buffer, 'utf8') > MAX_FRAME_BYTES) throw new Error('Runtime 消息超过大小限制');
+function parseFrames(buffer: string): { frames: RpcFrame[]; rest: string; overflow?: boolean } {
+  if (Buffer.byteLength(buffer, 'utf8') > MAX_FRAME_BYTES) {
+    // 缓冲区超限：标记 overflow，让调用方安全关闭连接而非抛出异常导致崩溃。
+    return { frames: [], rest: '', overflow: true };
+  }
   const lines = buffer.split('\n');
   const rest = lines.pop() ?? '';
   const frames = lines.filter(Boolean).map((line) => JSON.parse(line) as RpcFrame);
@@ -95,6 +98,16 @@ export class RuntimeRpcServer {
       try {
         const parsed = parseFrames(buffer);
         buffer = parsed.rest;
+        if (parsed.overflow) {
+          // parseFrames 检测到缓冲区超限：安全关闭连接。
+          const context = this.contexts.get(socket);
+          if (context) {
+            this.options.onClientDisconnected?.(context);
+            this.contexts.delete(socket);
+          }
+          socket.destroy();
+          return;
+        }
         for (const frame of parsed.frames) void this.receive(socket, frame);
       } catch {
         socket.destroy();
@@ -233,6 +246,11 @@ export class RuntimeRpcClient extends EventEmitter {
     try {
       const parsed = parseFrames(this.buffer);
       this.buffer = parsed.rest;
+      if (parsed.overflow) {
+        this.fail(new Error('OrbitSSH Runtime 消息超过大小限制，连接已重置'));
+        this.socket.destroy();
+        return;
+      }
       for (const frame of parsed.frames) {
         if (frame.type === 'hello-ack') {
           this.emit('hello', frame.protocol);

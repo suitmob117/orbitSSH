@@ -44,6 +44,17 @@ function createHarness(notifier?: { notifyPendingApproval(): void }) {
       stderr: ''
       };
     },
+    runCommand: async (_sessionId: string, _command: string) => {
+      return {
+      record: {
+        id: 'record-1', sessionId: session.id, command: 'pwd', startedAt: '',
+        stdoutTail: '/srv', stderrTail: '', summary: 'ok'
+      },
+      stdout: '/srv',
+      stderr: ''
+      };
+    },
+    cancelCommand: async () => ({ cancelled: true }),
     getTerminalSessionId: () => session.id,
     writeTerminal: (_terminalId: string, data: string) => terminalWrites.push(data)
   });
@@ -206,12 +217,11 @@ test('MCP 提交的命令始终按 Codex 身份处理，且不能调用批准接
     ),
     /MCP 客户端无权调用/
   );
-  await assert.rejects(
-    controller.handle(
-      'sessions:close',
-      { sessionId: 'session-1' },
-      { clientId: 'mcp-1', kind: 'mcp' }
-    ),
-    /MCP 客户端无权调用/
+  // sessions:close 现在允许 MCP 调用（自救能力）
+  const closeResult = await controller.handle(
+    'sessions:close',
+    { sessionId: 'session-1' },
+    { clientId: 'mcp-1', kind: 'mcp' }
   );
+  assert.deepEqual(closeResult, { ok: true });
 });

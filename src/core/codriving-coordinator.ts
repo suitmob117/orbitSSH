@@ -22,12 +22,14 @@ export type ApprovedActionSubmission = CodrivingCommandSubmission | CodrivingFil
 export interface CodrivingExecutionPort {
   getSession(sessionId: string): ConnectionSession;
   setAuthorizationLevel(sessionId: string, authorizationLevel: AuthorizationLevel): ConnectionSession;
+  runCommand(sessionId: string, command: string): Promise<CommandResult>;
   executeCommand(
     sessionId: string,
     command: string,
     options?: { echoCommand?: boolean; beforeStart?: () => void }
   ): Promise<CommandResult>;
   executeFileTransfer(request: FileTransferRequest): Promise<FileTransferResult>;
+  cancelCommand(sessionId: string): Promise<{ cancelled: boolean }>;
 }
 
 class CodexAccessPausedError extends Error {}
@@ -42,6 +44,7 @@ export interface CodrivingCoordinatorOptions {
 interface PendingCommand {
   action: CodrivingAction;
   command: string;
+  useTerminal?: boolean;
 }
 
 interface PendingFileTransfer {
@@ -78,7 +81,7 @@ export class CodrivingCoordinator {
     sessionId: string;
     actor: Exclude<CodrivingActor, 'system'>;
     command: string;
-  }): Promise<CommandSubmission> {
+  }, options?: { useTerminal?: boolean }): Promise<CommandSubmission> {
     const pauseReason = input.actor === 'codex' ? this.codexPauseReason(input.sessionId) : undefined;
     if (pauseReason) {
       const assessment = assessCommand(input.command);
@@ -112,14 +115,14 @@ export class CodrivingCoordinator {
 
     this.recordNewAction(action);
     if (action.status === 'pending_approval') {
-      this.pendingCommands.set(action.id, { action, command: input.command });
+      this.pendingCommands.set(action.id, { action, command: input.command, useTerminal: options?.useTerminal });
       return { action: { ...action } };
     }
 
     try {
-      const result = await this.execution.executeCommand(input.sessionId, input.command, {
-        echoCommand: input.actor === 'codex',
-        beforeStart: () => this.startQueuedCommand(action)
+      const result = await this.executeOrRun(input.sessionId, input.command, action, {
+        useTerminal: options?.useTerminal,
+        echoCommand: input.actor === 'codex'
       });
       this.settleExecutedAction(action, 'completed');
       return { action: { ...action }, result };
@@ -226,6 +229,10 @@ export class CodrivingCoordinator {
     return this.pausedCodexSessions.has(sessionId);
   }
 
+  async cancelCommand(sessionId: string): Promise<{ cancelled: boolean }> {
+    return this.execution.cancelCommand(sessionId);
+  }
+
   onActionChanged(listener: (action: CodrivingAction) => void): () => void {
     this.actionListeners.add(listener);
     return () => this.actionListeners.delete(listener);
@@ -263,9 +270,9 @@ export class CodrivingCoordinator {
       this.pendingCommands.delete(input.actionId);
       this.updateActionStatus(pending.action, 'queued');
       try {
-        const result = await this.execution.executeCommand(pending.action.sessionId, pending.command, {
-          echoCommand: pending.action.actor === 'codex',
-          beforeStart: () => this.startQueuedCommand(pending.action)
+        const result = await this.executeOrRun(pending.action.sessionId, pending.command, pending.action, {
+          useTerminal: pending.useTerminal,
+          echoCommand: pending.action.actor === 'codex'
         });
         this.settleExecutedAction(pending.action, 'completed');
         return { action: { ...pending.action }, result };
@@ -366,6 +373,22 @@ export class CodrivingCoordinator {
     if (this.pausedCodexSessions.has(sessionId)) {
       throw new CodexAccessPausedError('用户已完全接管当前会话，排队中的 Codex 操作未执行');
     }
+  }
+
+  private async executeOrRun(
+    sessionId: string,
+    command: string,
+    action: CodrivingAction,
+    options: { useTerminal?: boolean; echoCommand?: boolean }
+  ): Promise<CommandResult> {
+    if (options.useTerminal) {
+      return this.execution.executeCommand(sessionId, command, {
+        echoCommand: options.echoCommand,
+        beforeStart: () => this.startQueuedCommand(action)
+      });
+    }
+    this.startQueuedCommand(action);
+    return this.execution.runCommand(sessionId, command);
   }
 
   private startQueuedCommand(action: CodrivingAction): void {

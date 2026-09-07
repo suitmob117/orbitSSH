@@ -61,6 +61,20 @@ interface ManagedTerminal {
 }
 
 const TERMINAL_TRANSCRIPT_LIMIT = 64 * 1024;
+const MAX_OUTPUT_BYTES = 2 * 1024 * 1024;
+const ANSI_ESCAPE_PATTERN = /\x1b\[[0-9;]*[A-Za-z]/g;
+const OSC_SEQUENCE_PATTERN = /\x1b\][^\x07]*\x07/g;
+const SANITIZE_ENV_PREFIX = 'COMPOSE_PROGRESS=plain NO_COLOR=1 TERM=dumb ';
+
+function sanitizeOutput(raw: string): string {
+  return raw
+    .replace(OSC_SEQUENCE_PATTERN, '')
+    .replace(ANSI_ESCAPE_PATTERN, '')
+    .replace(/\r\n?/g, '\n')
+    .split('\n')
+    .filter((line, index, lines) => index === 0 || line !== lines[index - 1])
+    .join('\n');
+}
 
 function summarizeCommand(command: string, stdout: string, stderr: string, exitCode?: number): string {
   const risk = assessCommand(command);
@@ -237,6 +251,26 @@ export class SshSessionManager extends EventEmitter {
     this.sessions.delete(sessionId);
   }
 
+  async cancelCommand(sessionId: string): Promise<{ cancelled: boolean }> {
+    const managed = this.getManaged(sessionId);
+    let cancelled = false;
+    const terminal = managed.terminal;
+    if (terminal?.pending) {
+      clearTimeout(terminal.pending.timeout);
+      terminal.pending.settled = true;
+      terminal.pending = undefined;
+      try { terminal.stream.write('\x03'); } catch { /* 终端可能已关闭 */ }
+      cancelled = true;
+    }
+    const activeStream = this.activeExecStreams.get(sessionId);
+    if (activeStream) {
+      try { activeStream.close(); } catch { /* stream 可能已关闭 */ }
+      this.activeExecStreams.delete(sessionId);
+      cancelled = true;
+    }
+    return { cancelled };
+  }
+
   async getHealth(sessionId: string): Promise<ConnectionSession> {
     const managed = this.getManaged(sessionId);
     try {
@@ -259,8 +293,13 @@ export class SshSessionManager extends EventEmitter {
 
     enforceCommandAuthorization(managed.session.authorizationLevel, command);
     const startedAt = new Date().toISOString();
-    const result = await this.execRaw(managed.client, command);
-    return this.recordCommand(sessionId, command, startedAt, result);
+    const result = await this.execRaw(managed.client, `${SANITIZE_ENV_PREFIX}${command}`, 120_000, MAX_OUTPUT_BYTES, sessionId);
+    const sanitizedResult = {
+      ...result,
+      stdout: sanitizeOutput(result.stdout),
+      stderr: sanitizeOutput(result.stderr)
+    };
+    return this.recordCommand(sessionId, command, startedAt, sanitizedResult);
   }
 
   async executeCommand(
@@ -515,7 +554,9 @@ export class SshSessionManager extends EventEmitter {
       const timeout = setTimeout(() => {
         if (terminal.pending?.markerPrefix !== markerPrefix) return;
         terminal.pending.settled = true;
-        reject(new Error('共享终端命令执行超时'));
+        terminal.pending = undefined;
+        try { terminal.stream.write('\x03'); } catch { /* 终端可能已关闭 */ }
+        reject(new Error('命令执行超时，已强制回收终端状态'));
       }, 120_000);
       terminal.pending = {
         command,
@@ -696,18 +737,24 @@ export class SshSessionManager extends EventEmitter {
     throw new Error('每次输入密码模式尚未接入 GUI 密码弹窗，请使用保存密码或私钥');
   }
 
+  private readonly activeExecStreams = new Map<string, import('ssh2').ClientChannel>();
+
   private execRaw(
     client: Client,
     command: string,
-    timeoutMs = 120000
-  ): Promise<{ stdout: string; stderr: string; exitCode?: number; signal?: string }> {
+    timeoutMs = 120000,
+    maxOutputBytes = MAX_OUTPUT_BYTES,
+    trackSessionId?: string
+  ): Promise<{ stdout: string; stderr: string; exitCode?: number; signal?: string; truncated?: boolean }> {
     return new Promise((resolve, reject) => {
       let stdout = '';
       let stderr = '';
       let settled = false;
+      let truncated = false;
       const timeout = setTimeout(() => {
         if (!settled) {
           settled = true;
+          if (trackSessionId) this.activeExecStreams.delete(trackSessionId);
           reject(new Error('远程命令执行超时'));
         }
       }, timeoutMs);
@@ -715,21 +762,43 @@ export class SshSessionManager extends EventEmitter {
       client.exec(command, (error, stream) => {
         if (error) {
           clearTimeout(timeout);
+          if (trackSessionId) this.activeExecStreams.delete(trackSessionId);
           reject(sanitizedError(error));
           return;
         }
 
+        if (trackSessionId) {
+          this.activeExecStreams.set(trackSessionId, stream);
+          stream.on('close', () => {
+            if (this.activeExecStreams.get(trackSessionId) === stream) {
+              this.activeExecStreams.delete(trackSessionId);
+            }
+          });
+        }
+
         stream.on('data', (data: Buffer) => {
-          stdout += data.toString('utf8');
+          if (!truncated) {
+            stdout += data.toString('utf8');
+            if (Buffer.byteLength(stdout) + Buffer.byteLength(stderr) > maxOutputBytes) {
+              truncated = true;
+              try { stream.close(); } catch { /* 忽略关闭错误 */ }
+            }
+          }
         });
         stream.stderr.on('data', (data: Buffer) => {
-          stderr += data.toString('utf8');
+          if (!truncated) {
+            stderr += data.toString('utf8');
+            if (Buffer.byteLength(stdout) + Buffer.byteLength(stderr) > maxOutputBytes) {
+              truncated = true;
+              try { stream.close(); } catch { /* 忽略关闭错误 */ }
+            }
+          }
         });
         stream.on('close', (exitCode: number, signal: string) => {
           if (!settled) {
             settled = true;
             clearTimeout(timeout);
-            resolve({ stdout, stderr, exitCode, signal });
+            resolve({ stdout, stderr, exitCode, signal, truncated });
           }
         });
       });

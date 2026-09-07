@@ -7,6 +7,15 @@ import { connectRuntime } from '../runtime/runtime-client';
 const runtime = await connectRuntime({ kind: 'mcp' });
 registerProcessCleanup(() => { void runtime.close(); });
 
+let runtimeConnected = true;
+runtime.on('close', () => { runtimeConnected = false; });
+
+function assertConnected() {
+  if (!runtimeConnected) {
+    throw new Error('OrbitSSH Runtime 连接已断开，请重启 MCP 客户端以重新连接');
+  }
+}
+
 function text(value: unknown) {
   return {
     content: [
@@ -29,19 +38,20 @@ server.registerTool(
     title: 'List connection profiles',
     description: 'List saved OrbitSSH connection profiles without secrets.'
   },
-  async () => text(await runtime.call('profiles:list', {}))
+  async () => { assertConnected(); return text(await runtime.call('profiles:list', {})); }
 );
 
 server.registerTool(
   'open_connection_session',
   {
     title: 'Open connection session',
-    description: 'Open or reuse a persistent SSH connection session.',
+    description: 'Open or reuse a persistent SSH connection session. Use forceNew to close any existing session first.',
     inputSchema: {
-      profileId: z.string()
+      profileId: z.string(),
+      forceNew: z.boolean().optional().describe('Force close existing session and create a new one')
     }
   },
-  async ({ profileId }) => text(await runtime.call('sessions:open', { profileId }))
+  async ({ profileId, forceNew }) => { assertConnected(); return text(await runtime.call('sessions:open', { profileId, forceNew })); }
 );
 
 server.registerTool(
@@ -53,20 +63,44 @@ server.registerTool(
       sessionId: z.string()
     }
   },
-  async ({ sessionId }) => text(await runtime.call('sessions:health', { sessionId }))
+  async ({ sessionId }) => { assertConnected(); return text(await runtime.call('sessions:health', { sessionId })); }
 );
 
 server.registerTool(
   'run_remote_command',
   {
     title: 'Run remote command',
-    description: 'Run a command through an existing persistent SSH session.',
+    description: 'Run a command through an independent SSH exec channel. Does not occupy the interactive terminal.',
     inputSchema: {
       sessionId: z.string(),
       command: z.string()
     }
   },
-  async ({ sessionId, command }) => text(await runtime.call('commands:request', { sessionId, command }))
+  async ({ sessionId, command }) => { assertConnected(); return text(await runtime.call('commands:request', { sessionId, command })); }
+);
+
+server.registerTool(
+  'cancel_command',
+  {
+    title: 'Cancel running command',
+    description: 'Cancel any running remote command on the session. Sends Ctrl+C to terminal or closes exec channel.',
+    inputSchema: {
+      sessionId: z.string()
+    }
+  },
+  async ({ sessionId }) => { assertConnected(); return text(await runtime.call('commands:cancel', { sessionId })); }
+);
+
+server.registerTool(
+  'close_session',
+  {
+    title: 'Close session',
+    description: 'Forcefully close an SSH session and release all resources including terminals and exec channels.',
+    inputSchema: {
+      sessionId: z.string()
+    }
+  },
+  async ({ sessionId }) => { assertConnected(); return text(await runtime.call('sessions:close', { sessionId })); }
 );
 
 server.registerTool(
@@ -80,8 +114,10 @@ server.registerTool(
       remotePath: z.string().describe('远程 POSIX 路径，必须位于连接配置的远程允许目录内')
     }
   },
-  async ({ sessionId, localPath, remotePath }) =>
-    text(await runtime.call('files:request', { sessionId, localPath, remotePath, direction: 'upload' }))
+  async ({ sessionId, localPath, remotePath }) => {
+    assertConnected();
+    return text(await runtime.call('files:request', { sessionId, localPath, remotePath, direction: 'upload' }));
+  }
 );
 
 server.registerTool(
@@ -95,8 +131,10 @@ server.registerTool(
       localPath: z.string().describe('本地目标路径，父目录必须真实存在且位于连接配置的本地允许目录内')
     }
   },
-  async ({ sessionId, remotePath, localPath }) =>
-    text(await runtime.call('files:request', { sessionId, localPath, remotePath, direction: 'download' }))
+  async ({ sessionId, remotePath, localPath }) => {
+    assertConnected();
+    return text(await runtime.call('files:request', { sessionId, localPath, remotePath, direction: 'download' }));
+  }
 );
 
 const transport = new StdioServerTransport();

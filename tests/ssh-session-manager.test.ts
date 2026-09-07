@@ -617,7 +617,7 @@ test('command secrets are redacted from history without changing remote executio
 
   const result = await harness.manager.runCommand(session.id, command);
 
-  assert.deepEqual(harness.client.executedCommands, [command]);
+  assert.deepEqual(harness.client.executedCommands, [`COMPOSE_PROGRESS=plain NO_COLOR=1 TERM=dumb ${command}`]);
   assert.equal(harness.historyRecords[0]?.command, 'echo password=[REDACTED]');
   assert.equal(result.record.command, 'echo password=[REDACTED]');
 });
@@ -709,7 +709,7 @@ test('sensitive headers reach SSH unchanged but fail closed in command history',
 
   const result = await harness.manager.runCommand(session.id, command);
 
-  assert.deepEqual(harness.client.executedCommands, [command]);
+  assert.deepEqual(harness.client.executedCommands, [`COMPOSE_PROGRESS=plain NO_COLOR=1 TERM=dumb ${command}`]);
   assert.equal(harness.historyRecords[0]?.command, '[REDACTED:SENSITIVE_COMMAND]');
   assert.equal(result.record.command, '[REDACTED:SENSITIVE_COMMAND]');
   assert.equal(JSON.stringify(harness.historyRecords).includes(secret), false);

@@ -34,6 +34,15 @@ const TITLE_BAR_THEMES = {
 app.setName('OrbitSSH');
 if (process.platform === 'win32') app.setAppUserModelId('com.orbitssh.desktop');
 
+// CI / headless hosts can lack the graphics-runtime DLLs required by Chromium's
+// GPU child process. The packaged smoke test exercises startup only, so keep it
+// deterministic without changing acceleration for ordinary desktop sessions.
+if (process.env.ORBITSSH_PACKAGED_SMOKE_TEST === '1') {
+  app.disableHardwareAcceleration();
+  app.commandLine.appendSwitch('disable-gpu');
+  app.commandLine.appendSwitch('disable-software-rasterizer');
+}
+
 // 兜底：捕获任何漏网的未处理异常/拒绝，记录到日志而非触发 Electron 默认的
 // 「主进程 JavaScript 错误」白色弹窗。正常路径下错误应已在 RPC 客户端侧被
 // reject 并内联展示到终端；这里只为防止极端情况下再弹出 JS 白框。

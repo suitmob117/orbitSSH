@@ -15,11 +15,16 @@ test('识别单条明确的只读命令', () => {
 
 test('complex commands cannot masquerade as readonly commands', () => {
   assert.equal(assessCommand('ls; python mutate.py').risk, 'write');
-  assert.equal(assessCommand('ps aux | grep node').risk, 'write');
   assert.equal(assessCommand('cat $(echo /etc/passwd)').risk, 'write');
   assert.equal(assessCommand('cat file > copy').risk, 'write');
-  assert.equal(assessCommand('pwd\nuname -a').risk, 'write');
   assert.equal(assessCommand('ls & python mutate.py').risk, 'write');
+});
+
+test('compound commands with all-readonly segments are classified as readonly', () => {
+  assert.equal(assessCommand('ps aux | grep node').risk, 'readonly');
+  assert.equal(assessCommand('pwd\nuname -a').risk, 'readonly');
+  assert.equal(assessCommand('docker ps | grep sub2api').risk, 'readonly');
+  assert.equal(assessCommand('ls; uname -a').risk, 'readonly');
 });
 
 test('environment assignments and executable lookalikes cannot masquerade as readonly commands', () => {

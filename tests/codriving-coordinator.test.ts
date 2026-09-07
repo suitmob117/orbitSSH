@@ -64,6 +64,20 @@ class FakeExecutionPort implements CodrivingExecutionPort {
     return commandResult(command);
   }
 
+  async runCommand(sessionId: string, command: string): Promise<CommandResult> {
+    assert.equal(sessionId, this.session.id);
+    this.commandEchoOptions.push(undefined);
+    if (this.commandStartGate) await this.commandStartGate;
+    this.commands.push(command);
+    if (this.commandFinishGate) await this.commandFinishGate;
+    if (this.commandError) throw this.commandError;
+    return commandResult(command);
+  }
+
+  async cancelCommand(_sessionId: string): Promise<{ cancelled: boolean }> {
+    return { cancelled: true };
+  }
+
   async executeFileTransfer(request: FileTransferRequest): Promise<FileTransferResult> {
     this.transfers.push(request);
     return {
@@ -82,8 +96,8 @@ test('用户命令沿用本地输入回显，Codex 命令在共享终端主动�
   execution.session.authorizationLevel = 'auto_readonly';
   const coordinator = new CodrivingCoordinator(execution);
 
-  await coordinator.requestCommand({ sessionId: execution.session.id, actor: 'user', command: 'pwd' });
-  await coordinator.requestCommand({ sessionId: execution.session.id, actor: 'codex', command: 'df -h' });
+  await coordinator.requestCommand({ sessionId: execution.session.id, actor: 'user', command: 'pwd' }, { useTerminal: true });
+  await coordinator.requestCommand({ sessionId: execution.session.id, actor: 'codex', command: 'df -h' }, { useTerminal: true });
 
   assert.deepEqual(execution.commandEchoOptions, [false, true]);
 });
@@ -99,7 +113,7 @@ test('完全接管会阻止已经排队但尚未开始的 Codex 命令', async (
     sessionId: execution.session.id,
     actor: 'codex',
     command: 'df -h'
-  });
+  }, { useTerminal: true });
   await Promise.resolve();
   coordinator.pauseCodex(execution.session.id);
   releaseStart();
@@ -122,7 +136,7 @@ test('命令等待队首时显示排队中，真正开始后才显示进行中',
     sessionId: execution.session.id,
     actor: 'codex',
     command: 'df -h'
-  });
+  }, { useTerminal: true });
   await Promise.resolve();
   assert.equal(coordinator.listEvents(execution.session.id).at(-1)?.status, 'queued');
 
@@ -164,12 +178,12 @@ test('自动只读模式只自动执行明确的只读命令', async () => {
     sessionId: execution.session.id,
     actor: 'codex',
     command: 'df -h'
-  });
+  }, { useTerminal: true });
   const write = await coordinator.requestCommand({
     sessionId: execution.session.id,
     actor: 'codex',
     command: 'mkdir /tmp/orbitssh-demo'
-  });
+  }, { useTerminal: true });
 
   assert.equal(readonly.action.status, 'completed');
   assert.equal(write.action.status, 'pending_approval');
@@ -190,7 +204,7 @@ test('信任会话到期后自动降级为每次询问', async () => {
     sessionId: execution.session.id,
     actor: 'codex',
     command: 'mkdir /tmp/orbitssh-demo'
-  });
+  }, { useTerminal: true });
   now = new Date('2026-07-24T00:31:00.000Z');
   const afterExpiry = await coordinator.requestCommand({
     sessionId: execution.session.id,
@@ -247,12 +261,12 @@ test('完全接管会暂停新的 Codex 动作，但不影响用户直接操作'
     sessionId: execution.session.id,
     actor: 'codex',
     command: 'df -h'
-  });
+  }, { useTerminal: true });
   const user = await coordinator.requestCommand({
     sessionId: execution.session.id,
     actor: 'user',
     command: 'pwd'
-  });
+  }, { useTerminal: true });
 
   assert.equal(codex.action.status, 'paused');
   assert.equal(user.action.status, 'completed');

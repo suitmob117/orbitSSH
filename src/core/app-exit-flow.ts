@@ -27,7 +27,9 @@ export function createAppExitFlow(options: AppExitFlowOptions): AppExitFlow {
     if (prompting) return;
 
     prompting = true;
-    void options.choosePolicy()
+    // 30 秒超时：如果用户未响应策略选择弹窗，默认关闭全部并退出。
+    const timeout = new Promise<boolean>((resolve) => setTimeout(() => resolve(true), 30_000));
+    void Promise.race([options.choosePolicy(), timeout])
       .then(async (confirmed) => {
         if (!confirmed) return;
         await options.closeRuntime();
