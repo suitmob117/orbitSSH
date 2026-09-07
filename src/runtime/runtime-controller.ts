@@ -38,6 +38,14 @@ const terminalSubmitSchema = z.object({
   terminalId: idSchema,
   command: z.string().trim().min(1).max(256_000)
 }).strict();
+const localTerminalConfigSchema = z.object({
+  shell: z.string().optional(),
+  cwd: z.string().optional(),
+  env: z.record(z.string()).optional()
+}).strict().optional();
+const localTerminalWriteSchema = z.object({ terminalId: idSchema, data: z.string() }).strict();
+const localTerminalResizeSchema = z.object({ terminalId: idSchema, cols: z.number().int().min(1), rows: z.number().int().min(1) }).strict();
+const localTerminalCloseSchema = z.object({ terminalId: idSchema }).strict();
 const actionListSchema = z.object({ sessionId: idSchema, afterSequence: z.number().int().min(0).optional() }).strict();
 const exitPolicySchema = z.object({
   policy: z.enum(['keep_codex', 'finish_then_exit', 'close_all'])
@@ -96,6 +104,12 @@ export class RuntimeController {
       this.options.emit?.('terminal:data', chunk);
     });
     this.services.sessionManager.on('session-updated', (session: unknown) => {
+      this.options.emit?.('session:updated', session);
+    });
+    this.services.localSessionManager.on('terminal-data', (chunk: TerminalChunk) => {
+      this.options.emit?.('terminal:data', chunk);
+    });
+    this.services.localSessionManager.on('session-updated', (session: unknown) => {
       this.options.emit?.('session:updated', session);
     });
     this.approvalTimer = setInterval(() => this.expireApprovals(), 1_000);
@@ -309,6 +323,41 @@ export class RuntimeController {
       }
       case 'runtime:snapshot':
         return this.lifetime.snapshot();
+      case 'local:open-session': {
+        const config = localTerminalConfigSchema.parse(params);
+        const result = await this.services.localSessionManager.openLocalSession(config);
+        this.lifetime.registerSession(result.session.id);
+        this.options.emit?.('session:updated', result.session);
+        this.emitRuntimeState();
+        return result.session;
+      }
+      case 'local:open-terminal': {
+        const { sessionId } = sessionRequestSchema.parse(params);
+        return this.services.localSessionManager.openLocalTerminal(sessionId);
+      }
+      case 'local:write-terminal': {
+        const input = localTerminalWriteSchema.parse(params);
+        this.services.localSessionManager.writeLocalTerminal(input.terminalId, input.data);
+        return { ok: true };
+      }
+      case 'local:resize-terminal': {
+        const input = localTerminalResizeSchema.parse(params);
+        this.services.localSessionManager.resizeLocalTerminal(input.terminalId, input.cols, input.rows);
+        return { ok: true };
+      }
+      case 'local:close-terminal': {
+        const input = localTerminalCloseSchema.parse(params);
+        this.services.localSessionManager.closeLocalTerminal(input.terminalId);
+        return { ok: true };
+      }
+      case 'local:close-session': {
+        const { sessionId } = sessionRequestSchema.parse(params);
+        this.services.localSessionManager.closeLocalSession(sessionId);
+        this.lifetime.removeSession(sessionId);
+        this.options.emit?.('session:closed', { sessionId });
+        this.emitRuntimeState();
+        return { ok: true };
+      }
       default:
         throw new Error(`未知 Runtime 方法：${method}`);
     }
@@ -324,6 +373,7 @@ export class RuntimeController {
         // 关闭阶段尽力释放其余会话，最后再统一关闭存储。
       }
     }
+    this.services.localSessionManager.close();
     this.services.codrivingLedger?.replaceRuntimeLeases([]);
     this.services.close();
   }

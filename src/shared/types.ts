@@ -87,6 +87,7 @@ export interface ConnectionProfile {
   jumpHost?: string;
   localTransferRoot?: string;
   remoteTransferRoots?: string[];
+  kind?: 'ssh' | 'local';
   createdAt: string;
   updatedAt: string;
 }
@@ -114,6 +115,7 @@ export interface ConnectionSession {
   profileName: string;
   health: SessionHealth;
   authorizationLevel: AuthorizationLevel;
+  kind?: 'ssh' | 'local';
   openedAt: string;
   lastCheckedAt?: string;
   lastError?: string;
@@ -242,6 +244,18 @@ export interface TerminalChunk {
   data: string;
 }
 
+export interface TerminalReplay {
+  sessionId: string;
+  terminalId: string;
+  chunks: TerminalChunk[];
+}
+
+export interface LocalTerminalConfig {
+  shell?: string;
+  cwd?: string;
+  env?: Record<string, string>;
+}
+
 export interface TerminalSnapshot {
   terminalId: string;
   replay: string;
@@ -295,4 +309,10 @@ export interface AiSshApi {
   getApprovalAttentionCount(): Promise<number>;
   onApprovalAttention(callback: (count: number) => void): () => void;
   onSessionUpdated(callback: (session: ConnectionSession) => void): () => void;
+  readClipboardText(): Promise<string>;
+  openLocalSession(config?: LocalTerminalConfig): Promise<ConnectionSession>;
+  openLocalTerminal(sessionId: string): Promise<{ terminalId: string; replay: TerminalReplay }>;
+  writeLocalTerminal(terminalId: string, data: string): Promise<void>;
+  resizeLocalTerminal(terminalId: string, cols: number, rows: number): Promise<void>;
+  closeLocalTerminal(terminalId: string): Promise<void>;
 }

@@ -5,6 +5,7 @@ import type {
   AuthorizationLevel,
   ConnectionProfileInput,
   FileTransferRequest,
+  LocalTerminalConfig,
   TerminalChunk
 } from '@shared/types';
 
@@ -65,7 +66,14 @@ const api: AiSshApi = {
     const listener = (_event: Electron.IpcRendererEvent, session: Parameters<typeof callback>[0]) => callback(session);
     ipcRenderer.on('session:updated', listener);
     return () => ipcRenderer.off('session:updated', listener);
-  }
+  },
+  readClipboardText: () => ipcRenderer.invoke('clipboard:read-text'),
+  openLocalSession: (config?: LocalTerminalConfig) => ipcRenderer.invoke('local:open-session', config),
+  openLocalTerminal: (sessionId: string) => ipcRenderer.invoke('local:open-terminal', sessionId),
+  writeLocalTerminal: (terminalId: string, data: string) => ipcRenderer.invoke('local:write-terminal', terminalId, data),
+  resizeLocalTerminal: (terminalId: string, cols: number, rows: number) =>
+    ipcRenderer.invoke('local:resize-terminal', terminalId, cols, rows),
+  closeLocalTerminal: (terminalId: string) => ipcRenderer.invoke('local:close-terminal', terminalId)
 };
 
 contextBridge.exposeInMainWorld('aiSsh', api);

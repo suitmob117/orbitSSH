@@ -2,6 +2,7 @@ import { CredentialVault } from './credential-vault';
 import type { CodrivingLedger } from './codriving-ledger';
 import { HistoryStore } from './history-store';
 import { HostKeyStore } from './host-key-store';
+import { LocalSessionManager } from './local-session-manager';
 import { ProfileStore } from './profile-store';
 import { SqliteStore, type SqliteStorePort } from './sqlite-store';
 import { SshSessionManager } from './ssh-session-manager';
@@ -14,6 +15,7 @@ export interface CoreServices {
   historyStore: HistoryStore;
   hostKeyStore: HostKeyStore;
   sessionManager: SshSessionManager;
+  localSessionManager: LocalSessionManager;
   close(): void;
 }
 
@@ -37,6 +39,7 @@ export function createCoreServices(options: CoreServicesOptions = {}): CoreServi
   const historyStore = new HistoryStore({ sqlite: sqliteStore });
   const hostKeyStore = new HostKeyStore(sqliteStore);
   const sessionManager = new SshSessionManager(profileStore, credentialVault, historyStore, hostKeyStore);
+  const localSessionManager = new LocalSessionManager();
   let closed = false;
 
   return {
@@ -47,9 +50,11 @@ export function createCoreServices(options: CoreServicesOptions = {}): CoreServi
     historyStore,
     hostKeyStore,
     sessionManager,
+    localSessionManager,
     close: () => {
       if (closed) return;
       closed = true;
+      localSessionManager.close();
       sqliteStore.close();
     }
   };

@@ -38,7 +38,8 @@ import type {
   ConnectionSession,
   HostKeyTrustChallenge,
   LocalFileSelection,
-  RemoteFileEntry
+  RemoteFileEntry,
+  TerminalReplay
 } from '@shared/types';
 import { Button, DangerButton, Input, Label, SecondaryButton, Select } from './ui';
 import { SessionHeader } from './session-header';
@@ -181,7 +182,9 @@ export function ServerSidebar({
   onCreate,
   onSelect,
   onImport,
-  onExport
+  onExport,
+  onOpenLocalTerminal,
+  hasLocalSession
 }: {
   profiles: ConnectionProfile[];
   sessions: ConnectionSession[];
@@ -191,6 +194,8 @@ export function ServerSidebar({
   onSelect: (profile: ConnectionProfile) => void;
   onImport: () => void;
   onExport: () => void;
+  onOpenLocalTerminal: () => void;
+  hasLocalSession: boolean;
 }): JSX.Element {
   const [query, setQuery] = useState('');
   const filteredProfiles = useMemo(() => {
@@ -259,6 +264,15 @@ export function ServerSidebar({
           </span>
         </div>
         <p><i />按需运行 · 数据保存在本机</p>
+        <button
+          type="button"
+          className={cn('local-terminal-button', hasLocalSession && 'is-active')}
+          onClick={onOpenLocalTerminal}
+          disabled={busy}
+        >
+          <TerminalSquare />
+          <span>{hasLocalSession ? '本地终端运行中' : '开启本地终端'}</span>
+        </button>
       </div>
     </aside>
   );
@@ -281,6 +295,7 @@ function TerminalPanel({
   const terminalIdRef = useRef<string>();
   const codexPausedRef = useRef(codexPaused);
   codexPausedRef.current = codexPaused;
+  const isLocal = session.kind === 'local';
 
   const terminalTheme = () => {
     if (document.documentElement.classList.contains('green')) {
@@ -308,25 +323,43 @@ function TerminalPanel({
     terminal.loadAddon(fitAddon);
     terminal.open(containerRef.current);
     fitAddon.fit();
-    terminal.writeln('\x1b[38;2;98;238;224m正在打开共享共驾终端…\x1b[0m');
-    terminal.writeln('\x1b[38;2;226;153;62m提示：你和 Codex 的普通命令会按提交顺序执行；需要独占终端时，请打开会话头的“完全接管”开关。\x1b[0m');
+    if (isLocal) {
+      terminal.writeln('\x1b[38;2;98;238;224m本地终端已开启\x1b[0m');
+      terminal.writeln('\x1b[38;2;226;153;62m提示：本地终端始终为完全接管模式，所有输入直接发送到本机 Shell。\x1b[0m');
+    } else {
+      terminal.writeln('\x1b[38;2;98;238;224m正在打开共享共驾终端…\x1b[0m');
+      terminal.writeln('\x1b[38;2;226;153;62m提示：你和 Codex 的普通命令会按提交顺序执行；需要独占终端时，请打开会话头的“完全接管”开关。\x1b[0m');
+    }
     terminalRef.current = terminal;
     const writeRemoteOutput = (data: string): void => {
-      terminal.write(highlightServerPrompt(data));
+      terminal.write(isLocal ? data : highlightServerPrompt(data));
     };
     let disposed = false;
     const unsubscribe = window.aiSsh.onTerminalData((chunk) => {
       if (chunk.terminalId === terminalIdRef.current) writeRemoteOutput(chunk.data);
     });
-    void window.aiSsh.openTerminal(session.id).then(({ terminalId, replay }) => {
+    const terminalOpenPromise = isLocal
+      ? window.aiSsh.openLocalTerminal(session.id).then((result) => ({
+          terminalId: result.terminalId,
+          replay: result.replay.chunks.map((c) => c.data).join('')
+        }))
+      : window.aiSsh.openTerminal(session.id);
+    void terminalOpenPromise.then(({ terminalId, replay }) => {
       if (disposed) {
-        void window.aiSsh.closeTerminal(terminalId);
+        if (isLocal) void window.aiSsh.closeLocalTerminal(terminalId);
+        else void window.aiSsh.closeTerminal(terminalId);
         return;
       }
       terminalIdRef.current = terminalId;
       if (replay) writeRemoteOutput(replay);
       const tracker = new TerminalCommandTracker();
       terminal.onData((data) => {
+        if (isLocal) {
+          void window.aiSsh.writeLocalTerminal(terminalId, data).catch((error: unknown) => {
+            terminal.writeln(`\r\n终端输入未发送：${error instanceof Error ? error.message : String(error)}`);
+          });
+          return;
+        }
         if (codexPausedRef.current) {
           // Full takeover sends raw keyboard input to the remote PTY so the
           // shell owns completion, history, Ctrl-R and interactive programs.
@@ -364,13 +397,54 @@ function TerminalPanel({
     }).catch((error: unknown) => {
       terminal.writeln(`\r\n终端打开失败：${error instanceof Error ? error.message : String(error)}`);
     });
-    const resize = () => fitAddon.fit();
+    const resize = () => {
+      fitAddon.fit();
+      if (terminalIdRef.current && isLocal) {
+        void window.aiSsh.resizeLocalTerminal(terminalIdRef.current, terminal.cols, terminal.rows);
+      }
+    };
     window.addEventListener('resize', resize);
+
+    // 快捷键粘贴：拦截 Ctrl+V / Cmd+V
+    terminal.attachCustomKeyEventHandler((event: KeyboardEvent) => {
+      if (event.type === 'keydown' && ((event.ctrlKey || event.metaKey) && event.key === 'v')) {
+        void window.aiSsh.readClipboardText().then((text) => {
+          if (text && terminalRef.current) {
+            terminal.paste(text);
+          }
+        });
+        return false;
+      }
+      return true;
+    });
+
+    // 右键菜单粘贴
+    const containerEl = terminalRef.current?.element?.parentElement;
+    let contextMenuHandler: ((e: MouseEvent) => void) | undefined;
+    if (containerEl) {
+      contextMenuHandler = (e: MouseEvent) => {
+        e.preventDefault();
+        void window.aiSsh.readClipboardText().then((text) => {
+          if (text) {
+            terminal.paste(text);
+          }
+        });
+      };
+      containerEl.addEventListener('contextmenu', contextMenuHandler);
+    }
+
     return () => {
       disposed = true;
       window.removeEventListener('resize', resize);
+      if (containerEl && contextMenuHandler) {
+        containerEl.removeEventListener('contextmenu', contextMenuHandler);
+      }
+      terminal.attachCustomKeyEventHandler(() => true); // 清除快捷键拦截
       unsubscribe();
-      if (terminalIdRef.current) void window.aiSsh.closeTerminal(terminalIdRef.current);
+      if (terminalIdRef.current) {
+        if (isLocal) void window.aiSsh.closeLocalTerminal(terminalIdRef.current);
+        else void window.aiSsh.closeTerminal(terminalIdRef.current);
+      }
       terminal.dispose();
       terminalRef.current = undefined;
       fitAddonRef.current = undefined;
@@ -485,6 +559,7 @@ export function CenterWorkbench({
   profile,
   session,
   sessions,
+  localSession,
   form,
   authorizationLevel,
   codexPaused,
@@ -502,11 +577,13 @@ export function CenterWorkbench({
   onHealthCheck,
   onSave,
   onOpenTransfer,
-  onCommandRecorded
+  onCommandRecorded,
+  onCloseLocalTerminal
 }: {
   profile?: ConnectionProfile;
   session?: ConnectionSession;
   sessions: ConnectionSession[];
+  localSession?: ConnectionSession;
   form: ConnectionProfileInput;
   authorizationLevel: AuthorizationLevel;
   codexPaused: boolean;
@@ -525,7 +602,9 @@ export function CenterWorkbench({
   onSave: () => void;
   onOpenTransfer: () => void;
   onCommandRecorded: (record: CommandRecord) => void;
+  onCloseLocalTerminal: () => void;
 }): JSX.Element {
+  const hasActiveLocalSession = Boolean(localSession && localSession.health !== 'disconnected');
   return (
     <main className="center-workbench">
       <SessionHeader profile={profile} session={session} authorizationLevel={authorizationLevel} codexPaused={codexPaused} busy={busy} onAuthorizationLevelChange={onAuthorizationLevelChange} onToggleCodexPause={onToggleCodexPause} onHealthCheck={onHealthCheck} onConnect={onConnect} onDisconnect={onDisconnect} onOpenTransfer={onOpenTransfer} />
@@ -541,7 +620,10 @@ export function CenterWorkbench({
           {sessions.map((item) => (
             <TerminalPanel key={item.id} session={item} active={view === 'terminal' && session?.id === item.id} codexPaused={codexPaused} onCommandRecorded={onCommandRecorded} />
           ))}
-          {!session ? <EmptyTerminal /> : null}
+          {hasActiveLocalSession && (
+            <TerminalPanel key={localSession!.id} session={localSession!} active={view === 'terminal' && !session} codexPaused={false} onCommandRecorded={() => undefined} />
+          )}
+          {!session && !hasActiveLocalSession ? <EmptyTerminal /> : null}
         </div>
         {view === 'config' ? <ProfileEditor form={form} busy={busy} onChange={onFormChange} onSave={onSave} /> : null}
         {view === 'history' ? <HistoryView history={history} /> : null}

@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, nativeImage } from 'electron';
+import { app, BrowserWindow, clipboard, dialog, ipcMain, nativeImage } from 'electron';
 import { existsSync } from 'node:fs';
 import { readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -14,6 +14,7 @@ import type {
   FileTransferRequest,
   FileTransferResult,
   HostKeyTrustChallenge,
+  LocalTerminalConfig,
   ProfileExportDocument,
   RemoteFileEntry,
   TerminalChunk,
@@ -389,6 +390,27 @@ function registerIpc(client: RuntimeRpcClient): void {
   );
   ipcMain.handle('codriving:set-authorization', (_event, change) =>
     client.call<ConnectionSession>('codriving:set-authorization', change)
+  );
+  ipcMain.handle('clipboard:read-text', () => clipboard.readText());
+
+  // 本地终端 IPC handlers
+  ipcMain.handle('local:open-session', (_event, config?: LocalTerminalConfig) =>
+    client.call<ConnectionSession>('local:open-session', config)
+  );
+  ipcMain.handle('local:open-terminal', (_event, sessionId: string) =>
+    client.call<{ terminalId: string; replay: unknown }>('local:open-terminal', { sessionId })
+  );
+  ipcMain.handle('local:write-terminal', (_event, terminalId: string, data: string) =>
+    client.call('local:write-terminal', { terminalId, data })
+  );
+  ipcMain.handle('local:resize-terminal', (_event, terminalId: string, cols: number, rows: number) =>
+    client.call('local:resize-terminal', { terminalId, cols, rows })
+  );
+  ipcMain.handle('local:close-terminal', (_event, terminalId: string) =>
+    client.call('local:close-terminal', { terminalId })
+  );
+  ipcMain.handle('local:close-session', (_event, sessionId: string) =>
+    client.call('local:close-session', { sessionId })
   );
 
   client.on('terminal:data', (chunk: TerminalChunk) => {

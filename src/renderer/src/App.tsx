@@ -91,6 +91,7 @@ export function App(): JSX.Element {
   const [themePreference, setThemePreference] = useState<ThemePreference>(getInitialThemePreference);
   const [busy, setBusy] = useState(false);
   const [messageState, setMessageState] = useState<{ id: number; text: string; kind: MessageKind }>();
+  const [localSession, setLocalSession] = useState<ConnectionSession>();
   const actionCacheRef = useRef(new Map<string, CodrivingAction[]>());
   const message = messageState?.text;
 
@@ -328,6 +329,36 @@ export function App(): JSX.Element {
     setMessage('会话已安全关闭');
   }
 
+  async function openLocalTerminal(): Promise<void> {
+    if (localSession && localSession.health !== 'disconnected') {
+      setCenterView('terminal');
+      return;
+    }
+    setBusy(true);
+    setMessage(undefined);
+    try {
+      const session = await window.aiSsh.openLocalSession();
+      setLocalSession(session);
+      setCenterView('terminal');
+      setMessage('本地终端已开启');
+    } catch (error) {
+      setMessage(`本地终端开启失败：${error instanceof Error ? error.message : String(error)}`, 'error');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function closeLocalTerminal(): Promise<void> {
+    if (!localSession) return;
+    try {
+      await window.aiSsh.closeLocalTerminal(localSession.id);
+    } catch {
+      // 关闭失败时仍然清理状态
+    }
+    setLocalSession(undefined);
+    setMessage('本地终端已关闭');
+  }
+
   async function checkHealth(): Promise<void> {
     if (!activeSession) return;
     setBusy(true);
@@ -474,11 +505,14 @@ export function App(): JSX.Element {
           onSelect={selectProfile}
           onImport={() => void importProfiles()}
           onExport={() => void exportProfiles()}
+          onOpenLocalTerminal={() => void openLocalTerminal()}
+          hasLocalSession={Boolean(localSession && localSession.health !== 'disconnected')}
         />
         <CenterWorkbench
           profile={selectedProfile}
           session={activeSession}
           sessions={sessions.filter((session) => session.health !== 'disconnected')}
+          localSession={localSession}
           form={form}
           history={visibleHistory}
           view={centerView}
@@ -500,6 +534,7 @@ export function App(): JSX.Element {
             ...items.filter((item) => item.id !== record.id),
             record
           ])}
+          onCloseLocalTerminal={() => void closeLocalTerminal()}
         />
         <ActivityRail
           profile={selectedProfile}

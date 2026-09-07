@@ -59,12 +59,17 @@ function createHarness(notifier?: { notifyPendingApproval(): void }) {
     writeTerminal: (_terminalId: string, data: string) => terminalWrites.push(data)
   });
   const coordinator = new CodrivingCoordinator(sessionManager as never);
+  const localSessionManager = Object.assign(new EventEmitter(), {
+    listSessions: () => [],
+    close: () => undefined
+  });
   const controller = new RuntimeController({
     services: {
       profileStore: { list: async () => [] },
       historyStore: { list: async () => [] },
       credentialVault: {},
       sessionManager,
+      localSessionManager,
       close: () => undefined
     } as never,
     coordinator,
