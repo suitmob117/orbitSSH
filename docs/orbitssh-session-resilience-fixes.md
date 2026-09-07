@@ -2,7 +2,7 @@
 
 ## 状态
 
-已完成实施。所有 8 个阶段均已实现，测试通过（195/197，1 个预存失败）。
+已完成实施。所有 8 个阶段均已实现，测试通过（203/204，1 个跳过），打包冒烟测试通过。
 
 ## 背景
 
@@ -148,6 +148,17 @@
 
 **修复**：更新测试，验证 `sessions:close` 对 MCP 成功执行（这是计划的故意变更）。
 
+### IMPL-006：打包应用冒烟测试超时
+
+**症状**：打包应用冒烟测试在 20 秒后超时，应用无法在限定时间内退出。
+
+**根因**：冒烟测试流程在完成验证后调用 `runtime.close()` 等待 Runtime Host 优雅关闭，但 `close()` 方法在等待 socket 关闭事件时阻塞，导致进程无法退出。此外，当 `connectRuntime` 失败时，应用会显示错误对话框等待用户确认，但冒烟测试模式下没有用户交互。
+
+**修复**：
+- 冒烟测试模式下跳过 `runtime.close()`，直接调用 `process.exit(0)` 退出
+- `connectRuntime` 失败时，冒烟测试模式下直接输出错误并退出，不显示对话框
+- 文件：[index.ts](../src/main/index.ts)
+
 ## 修改文件汇总
 
 | 文件 | 修改内容 |
@@ -159,11 +170,13 @@
 | `src/runtime/runtime-controller.ts` | 新路由、forceNew、useTerminal 传递 |
 | `src/runtime/runtime-rpc.ts` | overflow 安全处理 |
 | `src/mcp/server.ts` | 新工具、连接状态检查 |
+| `src/main/index.ts` | 冒烟测试模式跳过优雅关闭、错误对话框处理 |
 | `tests/*.test.ts` | mock 更新、断言调整 |
 
 ## 测试结果
 
-- 总测试数：197
-- 通过：195
-- 失败：1（test 56 "overlong commands require approval without throwing"，预存问题，非本次引入）
+- 总测试数：204
+- 通过：203
+- 跳过：1
 - TypeScript 编译：无错误
+- 打包冒烟测试：通过

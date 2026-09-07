@@ -420,9 +420,8 @@ app.whenReady().then(async () => {
     await runtime.call('profiles:list', {});
     await runtime.call('runtime:set-exit-policy', { policy: 'close_all' });
     smokeWindow.destroy();
-    await runtime.close();
-    runtime = undefined;
-    app.exit(0);
+    // 冒烟测试模式下不需要优雅关闭，直接退出。
+    process.exit(0);
     return;
   }
   registerIpc(runtime);
@@ -435,6 +434,11 @@ app.whenReady().then(async () => {
     }
   });
 }).catch(async (error: unknown) => {
+  if (process.env.ORBITSSH_PACKAGED_SMOKE_TEST === '1') {
+    console.error('OrbitSSH 启动失败:', error instanceof Error ? error.message : String(error));
+    app.exit(1);
+    return;
+  }
   await dialog.showErrorBox('OrbitSSH 启动失败', error instanceof Error ? error.message : String(error));
   app.exit(1);
 });

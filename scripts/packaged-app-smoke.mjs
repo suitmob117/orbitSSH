@@ -44,13 +44,18 @@ try {
       },
       stdio: ['ignore', 'pipe', 'pipe']
     });
+    let stdout = '';
     let stderr = '';
     let timedOut = false;
+    child.stdout.on('data', (chunk) => { stdout += chunk.toString(); });
     child.stderr.on('data', (chunk) => { stderr += chunk.toString(); });
     const timeout = setTimeout(async () => {
       timedOut = true;
       await terminateProcessTree(child);
-      reject(new Error('打包应用启动验证超时'));
+      const error = new Error('打包应用启动验证超时');
+      if (stdout) error.message += `\nstdout:\n${stdout}`;
+      if (stderr) error.message += `\nstderr:\n${stderr}`;
+      reject(error);
     }, 20_000);
     child.once('error', (error) => {
       clearTimeout(timeout);

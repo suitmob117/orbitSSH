@@ -616,7 +616,13 @@ export class SshSessionManager extends EventEmitter {
     const stdout = `${pending.stdout}${beforeMarker}`.replace(/^\r?\n/, '');
     clearTimeout(pending.timeout);
     terminal.pending = undefined;
-    if (beforeMarker) this.emitTerminalData(terminal, beforeMarker);
+    if (beforeMarker) {
+      // 当命令输出不以换行结尾时，补充换行符以防止下一个 prompt 粘连在同一行。
+      const needsNewline = beforeMarker.length > 0
+        && !beforeMarker.endsWith('\n')
+        && !beforeMarker.endsWith('\r');
+      this.emitTerminalData(terminal, needsNewline ? `${beforeMarker}\n` : beforeMarker);
+    }
     if (afterMarker) this.emitTerminalData(terminal, afterMarker);
     const exitCode = Number.parseInt(exitCodeText, 10);
     if (!pending.settled) {

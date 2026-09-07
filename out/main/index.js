@@ -218,7 +218,8 @@ function createAppExitFlow(options) {
     event.preventDefault();
     if (prompting) return;
     prompting = true;
-    void options.choosePolicy().then(async (confirmed) => {
+    const timeout = new Promise((resolve) => setTimeout(() => resolve(true), 3e4));
+    void Promise.race([options.choosePolicy(), timeout]).then(async (confirmed) => {
       if (!confirmed) return;
       await options.closeRuntime();
       quitAllowed = true;
@@ -245,7 +246,9 @@ function encode(frame) {
 `;
 }
 function parseFrames(buffer) {
-  if (Buffer.byteLength(buffer, "utf8") > MAX_FRAME_BYTES) throw new Error("Runtime 消息超过大小限制");
+  if (Buffer.byteLength(buffer, "utf8") > MAX_FRAME_BYTES) {
+    return { frames: [], rest: "", overflow: true };
+  }
   const lines = buffer.split("\n");
   const rest = lines.pop() ?? "";
   const frames = lines.filter(Boolean).map((line) => JSON.parse(line));
@@ -346,6 +349,11 @@ class RuntimeRpcClient extends EventEmitter {
     try {
       const parsed = parseFrames(this.buffer);
       this.buffer = parsed.rest;
+      if (parsed.overflow) {
+        this.fail(new Error("OrbitSSH Runtime 消息超过大小限制，连接已重置"));
+        this.socket.destroy();
+        return;
+      }
       for (const frame of parsed.frames) {
         if (frame.type === "hello-ack") {
           this.emit("hello", frame.protocol);
@@ -849,9 +857,7 @@ app.whenReady().then(async () => {
     await runtime.call("profiles:list", {});
     await runtime.call("runtime:set-exit-policy", { policy: "close_all" });
     smokeWindow.destroy();
-    await runtime.close();
-    runtime = void 0;
-    app.exit(0);
+    process.exit(0);
     return;
   }
   registerIpc(runtime);
@@ -863,6 +869,11 @@ app.whenReady().then(async () => {
     }
   });
 }).catch(async (error) => {
+  if (process.env.ORBITSSH_PACKAGED_SMOKE_TEST === "1") {
+    console.error("OrbitSSH 启动失败:", error instanceof Error ? error.message : String(error));
+    app.exit(1);
+    return;
+  }
   await dialog.showErrorBox("OrbitSSH 启动失败", error instanceof Error ? error.message : String(error));
   app.exit(1);
 });

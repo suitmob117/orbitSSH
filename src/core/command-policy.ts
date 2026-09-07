@@ -59,6 +59,7 @@ const READONLY_EXECUTABLES = new Set([
 const COMPLEX_SHELL_SYNTAX = /(?:\r|\n|&|\|\||[;|<>`]|\$\()/;
 const COMMON_EXECUTABLE_PATH = /^\/(?:usr\/)?s?bin\/([^/]+)$/i;
 const ENVIRONMENT_ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*\+?=/;
+const MAX_READONLY_COMMAND_LENGTH = 4096;
 const MAX_COMMAND_LENGTH = 256_000;
 const MAX_WRAPPER_DEPTH = 32;
 const COMMAND_OPTIONS_WITH_VALUE = new Set<string>();
@@ -312,6 +313,9 @@ function isReadonlyCommand(command: string): boolean {
   if (executable === 'docker') {
     return isDockerReadonly(args);
   }
+  if (executable === 'curl') {
+    return isCurlReadonly(args);
+  }
   if (executable === 'caddy') {
     return args[0] === 'validate' || args[0] === 'version' || args[0] === 'list-modules';
   }
@@ -322,15 +326,71 @@ function isDockerReadonly(args: string[]): boolean {
   if (args.length === 0) return false;
   const sub = args[0];
   const readonlyDockerSubcommands = new Set([
-    'ps', 'images', 'inspect', 'logs', 'stats', 'top', 'port', 'events', 'history'
+    'ps', 'images', 'inspect', 'logs', 'stats', 'top', 'port', 'events', 'history',
+    'info', 'version', 'diff'
   ]);
   if (readonlyDockerSubcommands.has(sub)) return true;
+  // 复合子命令：docker network ls、docker volume inspect 等
+  const readonlyCompound: Record<string, Set<string>> = {
+    network: new Set(['ls', 'inspect']),
+    volume: new Set(['ls', 'inspect']),
+    container: new Set(['ls', 'inspect', 'logs', 'stats', 'top', 'port', 'diff']),
+    system: new Set(['df', 'info', 'events'])
+  };
+  const compound = readonlyCompound[sub];
+  if (compound) {
+    const subSub = args[1];
+    return subSub !== undefined && compound.has(subSub);
+  }
   if (sub === 'compose') {
     const composeSub = args[1];
     return composeSub === 'ps' || composeSub === 'logs' || composeSub === 'images'
       || composeSub === 'config' || composeSub === 'version';
   }
   return false;
+}
+
+function isCurlReadonly(args: string[]): boolean {
+  const CURL_WRITE_FLAGS = new Set([
+    '-o', '--output', '-O', '--remote-name', '-J', '--remote-header-name'
+  ]);
+
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+
+    // 跳过 URL 参数，避免查询字符串中的标志被误判
+    if (/^https?:\/\//i.test(arg) || /^ftp:\/\//i.test(arg)) continue;
+
+    if (arg === '-X' || arg === '--request') {
+      const method = (args[index + 1] ?? '').toUpperCase();
+      if (method !== 'GET') return false;
+    }
+
+    // 精确匹配 -d 数据上传标志
+    if (arg === '-d') return false;
+
+    // 穷举所有 --data-* 变体
+    if (
+      arg === '--data' ||
+      arg === '--data-raw' ||
+      arg === '--data-binary' ||
+      arg === '--data-urlencode' ||
+      arg === '--data-ascii'
+    ) {
+      return false;
+    }
+
+    // --data= 形式
+    if (arg.startsWith('--data=')) return false;
+
+    // 精确匹配文件写入标志（-o file 和 --output=file 形式均检测）
+    if (CURL_WRITE_FLAGS.has(arg)) return false;
+    if (arg.startsWith('--output=')) return false;
+
+    // -T / --upload-file 上传本地文件
+    if (arg === '-T' || arg === '--upload-file') return false;
+  }
+  return true;
 }
 
 function isDestructiveRm(command: ParsedShellCommand): boolean {
@@ -442,6 +502,9 @@ export function assessCommand(command: string): CommandAssessment {
   }
   if (!trimmed) {
     return { risk: 'write', reason: '空命令不能被确认为只读操作' };
+  }
+  if (trimmed.length > MAX_READONLY_COMMAND_LENGTH) {
+    return { risk: 'write', reason: '命令过长，无法安全分类为只读操作' };
   }
   if (isHighRiskCommand(trimmed)) {
     return { risk: 'high', reason: '命令可能影响系统、用户、磁盘或 SSH 访问' };

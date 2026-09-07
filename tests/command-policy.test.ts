@@ -1,5 +1,4 @@
-import assert from 'node:assert/strict';
-import test from 'node:test';
+import { describe, expect, it } from 'vitest';
 
 import {
   assessCommand,
@@ -9,265 +8,353 @@ import {
   enforceTransferAuthorization
 } from '../src/core/command-policy';
 
-test('识别单条明确的只读命令', () => {
-  assert.equal(assessCommand('ls -la').risk, 'readonly');
-});
+describe('command-policy', () => {
+  describe('基础只读分类', () => {
+    it('识别单条明确的只读命令', () => {
+      expect(assessCommand('ls -la').risk).toBe('readonly');
+    });
 
-test('complex commands cannot masquerade as readonly commands', () => {
-  assert.equal(assessCommand('ls; python mutate.py').risk, 'write');
-  assert.equal(assessCommand('cat $(echo /etc/passwd)').risk, 'write');
-  assert.equal(assessCommand('cat file > copy').risk, 'write');
-  assert.equal(assessCommand('ls & python mutate.py').risk, 'write');
-});
+    it('complex commands cannot masquerade as readonly commands', () => {
+      expect(assessCommand('ls; python mutate.py').risk).toBe('write');
+      expect(assessCommand('cat $(echo /etc/passwd)').risk).toBe('write');
+      expect(assessCommand('cat file > copy').risk).toBe('write');
+      expect(assessCommand('ls & python mutate.py').risk).toBe('write');
+    });
 
-test('compound commands with all-readonly segments are classified as readonly', () => {
-  assert.equal(assessCommand('ps aux | grep node').risk, 'readonly');
-  assert.equal(assessCommand('pwd\nuname -a').risk, 'readonly');
-  assert.equal(assessCommand('docker ps | grep sub2api').risk, 'readonly');
-  assert.equal(assessCommand('ls; uname -a').risk, 'readonly');
-});
+    it('compound commands with all-readonly segments are classified as readonly', () => {
+      expect(assessCommand('ps aux | grep node').risk).toBe('readonly');
+      expect(assessCommand('pwd\nuname -a').risk).toBe('readonly');
+      expect(assessCommand('docker ps | grep sub2api').risk).toBe('readonly');
+      expect(assessCommand('ls; uname -a').risk).toBe('readonly');
+    });
 
-test('environment assignments and executable lookalikes cannot masquerade as readonly commands', () => {
-  const commands = ['ls=shadowed python mutate.py', 'cat=x sh /tmp/mutate.sh', 'ps=x ./mutate'];
-
-  for (const command of commands) {
-    assert.equal(assessCommand(command).risk, 'write');
-    assert.equal(authorizeCommand('auto_readonly', command).allowed, false);
-  }
-});
-
-test('readonly command arguments are not treated as executables', () => {
-  const commands = ['grep passwd /etc/passwd', 'grep reboot notes.txt', 'ls shutdown'];
-
-  for (const command of commands) {
-    assert.equal(assessCommand(command).risk, 'readonly');
-    assert.equal(authorizeCommand('auto_readonly', command).allowed, true);
-  }
-});
-
-test('readonly lookup and search commands do not treat arguments as writes or execution', () => {
-  const commands = [
-    'grep rm notes.txt',
-    'grep mkdir notes.txt',
-    'command -v shutdown',
-    'command -V reboot'
-  ];
-
-  for (const command of commands) {
-    assert.equal(assessCommand(command).risk, 'readonly');
-    assert.equal(authorizeCommand('auto_readonly', command).allowed, true);
-  }
-});
-
-test('readonly classification requires an unwrapped executable in the original command position', () => {
-  const commands = ['FOO=bar ls', 'env ls', 'sudo ls', 'command ls'];
-
-  for (const command of commands) {
-    assert.equal(assessCommand(command).risk, 'write');
-    assert.equal(authorizeCommand('auto_readonly', command).allowed, false);
-  }
-});
-
-test('systemctl status remains readonly after leading readonly options', () => {
-  const commands = [
-    'systemctl --no-pager status ssh',
-    'systemctl --quiet status sshd',
-    'systemctl --host=example.test status ssh'
-  ];
-
-  for (const command of commands) {
-    assert.equal(assessCommand(command).risk, 'readonly');
-    assert.equal(authorizeCommand('auto_readonly', command).allowed, true);
-  }
-});
-
-test('ambiguous readonly-looking commands require approval', () => {
-  const commands = [
-    'find . -delete',
-    'find . -exec /tmp/mutate {} +',
-    'date --set=tomorrow',
-    'journalctl --rotate',
-    'rg --pre mutate pattern',
-    'less -o output.log file'
-  ];
-
-  for (const command of commands) {
-    assert.equal(assessCommand(command).risk, 'write');
-    assert.equal(authorizeCommand('auto_readonly', command).allowed, false);
-  }
-});
-
-test('high risk commands retain their risk in compound syntax', () => {
-  assert.equal(assessCommand('rm -rf /; true').risk, 'high');
-  assert.equal(assessCommand('shutdown -h now && true').risk, 'high');
-  assert.equal(assessCommand('sudo -n rm -rf /tmp/demo').risk, 'high');
-  assert.equal(assessCommand('rm -fr /').risk, 'high');
-  assert.equal(assessCommand('rm -r -f /').risk, 'high');
-  assert.equal(assessCommand('rm --recursive --force /').risk, 'high');
-  assert.equal(assessCommand('sudo -- rm -rf /').risk, 'high');
-  assert.equal(assessCommand('sudo -u root -- rm -rf /').risk, 'high');
-  assert.equal(assessCommand('FOO=bar rm -rf /').risk, 'high');
-  assert.equal(assessCommand('sudo FOO=bar rm -rf /').risk, 'high');
-  assert.equal(assessCommand('command rm -rf /').risk, 'high');
-  assert.equal(assessCommand('env rm -rf /').risk, 'high');
-  assert.equal(assessCommand('sudo -D /tmp rm -rf /').risk, 'high');
-  assert.equal(assessCommand('command shutdown -h now').risk, 'high');
-  assert.equal(assessCommand('FOO=bar shutdown -h now').risk, 'high');
-  assert.equal(assessCommand('sudo env reboot').risk, 'high');
-  assert.equal(assessCommand("bash -c 'rm -rf /'").risk, 'high');
-});
-
-const trustedSessionHighRiskCommands = [
-  String.raw`r\m -rf /`,
-  String.raw`system\ctl restart ssh`,
-  "dash -c 'rm -rf /'",
-  'dd of=/dev/sda',
-  'poweroff',
-  'halt',
-  'systemctl poweroff',
-  'fdisk /dev/sda',
-  'systemctl restart ssh.socket',
-  'rm -r /home'
-];
-
-for (const command of trustedSessionHighRiskCommands) {
-  test(`trusted sessions reject high risk command: ${command}`, () => {
-    assert.equal(assessCommand(command).risk, 'high');
-    assert.equal(authorizeCommand('trusted_session', command).allowed, false);
-    assert.equal(authorizeCommand('ask_every_time', command).allowed, true);
+    it('hostname is classified as readonly', () => {
+      expect(assessCommand('hostname').risk).toBe('readonly');
+      expect(authorizeCommand('auto_readonly', 'hostname').allowed).toBe(true);
+    });
   });
-}
 
-test('a trailing unquoted backslash fails closed without throwing', () => {
-  const command = 'ls\\';
+  describe('curl 命令分类', () => {
+    it('curl defaults to readonly (GET request)', () => {
+      expect(assessCommand('curl https://example.com').risk).toBe('readonly');
+      expect(assessCommand('curl -s https://example.com/api').risk).toBe('readonly');
+      expect(assessCommand('curl -H "Accept: application/json" https://example.com').risk).toBe('readonly');
+      expect(authorizeCommand('auto_readonly', 'curl https://example.com').allowed).toBe(true);
+    });
 
-  assert.doesNotThrow(() => assessCommand(command));
-  assert.equal(assessCommand(command).risk, 'write');
-  assert.equal(authorizeCommand('auto_readonly', command).allowed, false);
-});
+    it('curl with write indicators is classified as write', () => {
+      expect(assessCommand('curl -X POST https://example.com/api').risk).toBe('write');
+      expect(assessCommand('curl -X PUT -d \'{"key":"val"}\' https://example.com').risk).toBe('write');
+      expect(assessCommand('curl -d "data" https://example.com').risk).toBe('write');
+      expect(assessCommand('curl --data-binary @file https://example.com').risk).toBe('write');
+      expect(assessCommand('curl -T upload.txt https://example.com').risk).toBe('write');
+      expect(assessCommand('curl --request DELETE https://example.com/api').risk).toBe('write');
+      expect(authorizeCommand('auto_readonly', 'curl -X POST https://example.com').allowed).toBe(false);
+    });
 
-test('backslashes inside single quotes remain literal', () => {
-  const command = String.raw`r'\m' -rf /`;
+    it('curl file write flags are classified as write', () => {
+      // -o / --output 写入指定本地文件
+      expect(assessCommand('curl -o file.txt https://example.com').risk).toBe('write');
+      expect(assessCommand('curl --output file.txt https://example.com').risk).toBe('write');
+      expect(assessCommand('curl --output=file.txt https://example.com').risk).toBe('write');
+      // -O / --remote-name 以 URL 末尾文件名写入
+      expect(assessCommand('curl -O https://example.com/file.txt').risk).toBe('write');
+      expect(assessCommand('curl --remote-name https://example.com/file.txt').risk).toBe('write');
+      // -J / --remote-header-name 配合 -O 使用 Content-Disposition 文件名
+      expect(assessCommand('curl -J -O https://example.com/file.txt').risk).toBe('write');
+      expect(assessCommand('curl --remote-header-name --remote-name https://example.com/file.txt').risk).toBe('write');
+      expect(authorizeCommand('auto_readonly', 'curl -o file.txt https://example.com').allowed).toBe(false);
+    });
 
-  assert.equal(assessCommand(command).risk, 'write');
-  assert.equal(authorizeCommand('trusted_session', command).allowed, true);
-});
+    it('curl URL query params do not trigger false write detection', () => {
+      // URL 查询字符串中的 -d 不应被误判为 curl 标志
+      expect(assessCommand('curl https://api.com/search?-debug=1').risk).toBe('readonly');
+      expect(assessCommand('curl "https://api.com/search?-d=data"').risk).toBe('readonly');
+      expect(assessCommand('curl https://api.com/search?-o=file').risk).toBe('readonly');
+    });
 
-test('append environment assignments cannot hide high risk commands from trusted sessions', () => {
-  const commands = [
-    'env FOO+=x rm -rf /',
-    'sudo FOO+=x systemctl restart ssh'
-  ];
+    it('curl -o writes file and is not readonly', () => {
+      expect(assessCommand('curl -o file.txt https://example.com').risk).toBe('write');
+    });
 
-  for (const command of commands) {
-    assert.equal(assessCommand(command).risk, 'high');
-    assert.equal(authorizeCommand('trusted_session', command).allowed, false);
-  }
-});
+    it('curl -O writes file and is not readonly', () => {
+      expect(assessCommand('curl -O https://example.com/file.txt').risk).toBe('write');
+    });
 
-test('systemctl options do not hide high risk SSH restarts', () => {
-  const commands = ['systemctl --no-pager restart ssh', 'systemctl --quiet restart sshd'];
+    it('curl with URL query params containing -d is still readonly', () => {
+      expect(assessCommand('curl https://api.com/search?-debug=1').risk).toBe('readonly');
+    });
+  });
 
-  for (const command of commands) {
-    assert.equal(assessCommand(command).risk, 'high');
-    assert.equal(authorizeCommand('auto_readonly', command).allowed, false);
-  }
-});
+  describe('docker 命令分类', () => {
+    it('docker readonly subcommands include inspect, info, network, volume, container, system', () => {
+      const readonlyCommands = [
+        'docker inspect my-container',
+        'docker info',
+        'docker version',
+        'docker diff my-container',
+        'docker network ls',
+        'docker network inspect bridge',
+        'docker volume ls',
+        'docker volume inspect my-vol',
+        'docker container ls',
+        'docker container inspect my-container',
+        'docker container logs my-container',
+        'docker system df',
+        'docker system info'
+      ];
+      for (const command of readonlyCommands) {
+        expect(assessCommand(command).risk).toBe('readonly');
+        expect(authorizeCommand('auto_readonly', command).allowed).toBe(true);
+      }
+    });
 
-test('systemctl value options cannot hide high risk SSH restarts from trusted sessions', () => {
-  const commands = [
-    'systemctl --output short restart ssh',
-    'systemctl -o short restart ssh',
-    'systemctl --lines 20 restart ssh'
-  ];
+    it('docker write subcommands remain classified as write', () => {
+      expect(assessCommand('docker run -d nginx').risk).toBe('write');
+      expect(assessCommand('docker compose up -d').risk).toBe('write');
+      expect(assessCommand('docker build -t myimage .').risk).toBe('write');
+      expect(assessCommand('docker rm my-container').risk).toBe('write');
+      expect(assessCommand('docker pull nginx').risk).toBe('write');
+      expect(assessCommand('docker network prune').risk).toBe('write');
+      expect(assessCommand('docker volume prune').risk).toBe('write');
+      expect(assessCommand('docker system prune').risk).toBe('write');
+      expect(assessCommand('docker container prune').risk).toBe('write');
+    });
+  });
 
-  for (const command of commands) {
-    assert.equal(assessCommand(command).risk, 'high');
-    assert.equal(authorizeCommand('trusted_session', command).allowed, false);
-  }
-});
+  describe('伪装防护', () => {
+    it('environment assignments and executable lookalikes cannot masquerade as readonly commands', () => {
+      const commands = ['ls=shadowed python mutate.py', 'cat=x sh /tmp/mutate.sh', 'ps=x ./mutate'];
+      for (const command of commands) {
+        expect(assessCommand(command).risk).toBe('write');
+        expect(authorizeCommand('auto_readonly', command).allowed).toBe(false);
+      }
+    });
 
-test('systemctl options between restart and SSH units cannot bypass trusted-session approval', () => {
-  const commands = [
-    'systemctl restart --no-block ssh',
-    'systemctl restart --job-mode replace ssh',
-    'systemctl restart -- ssh'
-  ];
+    it('readonly command arguments are not treated as executables', () => {
+      const commands = ['grep passwd /etc/passwd', 'grep reboot notes.txt', 'ls shutdown'];
+      for (const command of commands) {
+        expect(assessCommand(command).risk).toBe('readonly');
+        expect(authorizeCommand('auto_readonly', command).allowed).toBe(true);
+      }
+    });
 
-  for (const command of commands) {
-    assert.equal(assessCommand(command).risk, 'high');
-    assert.equal(authorizeCommand('trusted_session', command).allowed, false);
-  }
-});
+    it('readonly lookup and search commands do not treat arguments as writes or execution', () => {
+      const commands = [
+        'grep rm notes.txt',
+        'grep mkdir notes.txt',
+        'command -v shutdown',
+        'command -V reboot'
+      ];
+      for (const command of commands) {
+        expect(assessCommand(command).risk).toBe('readonly');
+        expect(authorizeCommand('auto_readonly', command).allowed).toBe(true);
+      }
+    });
 
-test('deeply wrapped commands require approval without overflowing the parser', () => {
-  const deeplyWrapped = 'env '.repeat(10_000) + 'ls';
+    it('readonly classification requires an unwrapped executable in the original command position', () => {
+      const commands = ['FOO=bar ls', 'env ls', 'sudo ls', 'command ls'];
+      for (const command of commands) {
+        expect(assessCommand(command).risk).toBe('write');
+        expect(authorizeCommand('auto_readonly', command).allowed).toBe(false);
+      }
+    });
+  });
 
-  assert.doesNotThrow(() => assessCommand(deeplyWrapped));
-  assert.equal(assessCommand(deeplyWrapped).risk, 'write');
-  assert.equal(authorizeCommand('auto_readonly', deeplyWrapped).allowed, false);
-});
+  describe('systemctl 命令分类', () => {
+    it('systemctl status remains readonly after leading readonly options', () => {
+      const commands = [
+        'systemctl --no-pager status ssh',
+        'systemctl --quiet status sshd',
+        'systemctl --host=example.test status ssh'
+      ];
+      for (const command of commands) {
+        expect(assessCommand(command).risk).toBe('readonly');
+        expect(authorizeCommand('auto_readonly', command).allowed).toBe(true);
+      }
+    });
 
-test('wrapper nesting beyond the policy limit requires approval', () => {
-  const deeplyWrapped = 'env '.repeat(33) + 'rm -rf /';
+    it('ambiguous readonly-looking commands require approval', () => {
+      const commands = [
+        'find . -delete',
+        'find . -exec /tmp/mutate {} +',
+        'date --set=tomorrow',
+        'journalctl --rotate',
+        'rg --pre mutate pattern',
+        'less -o output.log file'
+      ];
+      for (const command of commands) {
+        expect(assessCommand(command).risk).toBe('write');
+        expect(authorizeCommand('auto_readonly', command).allowed).toBe(false);
+      }
+    });
 
-  assert.equal(assessCommand(deeplyWrapped).risk, 'write');
-  assert.equal(authorizeCommand('auto_readonly', deeplyWrapped).allowed, false);
-});
+    it('systemctl options do not hide high risk SSH restarts', () => {
+      const commands = ['systemctl --no-pager restart ssh', 'systemctl --quiet restart sshd'];
+      for (const command of commands) {
+        expect(assessCommand(command).risk).toBe('high');
+        expect(authorizeCommand('auto_readonly', command).allowed).toBe(false);
+      }
+    });
 
-test('overlong commands require approval without throwing', () => {
-  const overlongCommand = 'ls ' + 'a'.repeat(40_000);
+    it('systemctl value options cannot hide high risk SSH restarts from trusted sessions', () => {
+      const commands = [
+        'systemctl --output short restart ssh',
+        'systemctl -o short restart ssh',
+        'systemctl --lines 20 restart ssh'
+      ];
+      for (const command of commands) {
+        expect(assessCommand(command).risk).toBe('high');
+        expect(authorizeCommand('trusted_session', command).allowed).toBe(false);
+      }
+    });
 
-  assert.doesNotThrow(() => assessCommand(overlongCommand));
-  assert.equal(assessCommand(overlongCommand).risk, 'write');
-  assert.equal(authorizeCommand('auto_readonly', overlongCommand).allowed, false);
-});
+    it('systemctl options between restart and SSH units cannot bypass trusted-session approval', () => {
+      const commands = [
+        'systemctl restart --no-block ssh',
+        'systemctl restart --job-mode replace ssh',
+        'systemctl restart -- ssh'
+      ];
+      for (const command of commands) {
+        expect(assessCommand(command).risk).toBe('high');
+        expect(authorizeCommand('trusted_session', command).allowed).toBe(false);
+      }
+    });
+  });
 
-test('empty commands are treated as write operations', () => {
-  assert.equal(assessCommand('   ').risk, 'write');
-});
+  describe('高危命令', () => {
+    it('high risk commands retain their risk in compound syntax', () => {
+      expect(assessCommand('rm -rf /; true').risk).toBe('high');
+      expect(assessCommand('shutdown -h now && true').risk).toBe('high');
+      expect(assessCommand('sudo -n rm -rf /tmp/demo').risk).toBe('high');
+      expect(assessCommand('rm -fr /').risk).toBe('high');
+      expect(assessCommand('rm -r -f /').risk).toBe('high');
+      expect(assessCommand('rm --recursive --force /').risk).toBe('high');
+      expect(assessCommand('sudo -- rm -rf /').risk).toBe('high');
+      expect(assessCommand('sudo -u root -- rm -rf /').risk).toBe('high');
+      expect(assessCommand('FOO=bar rm -rf /').risk).toBe('high');
+      expect(assessCommand('sudo FOO=bar rm -rf /').risk).toBe('high');
+      expect(assessCommand('command rm -rf /').risk).toBe('high');
+      expect(assessCommand('env rm -rf /').risk).toBe('high');
+      expect(assessCommand('sudo -D /tmp rm -rf /').risk).toBe('high');
+      expect(assessCommand('command shutdown -h now').risk).toBe('high');
+      expect(assessCommand('FOO=bar shutdown -h now').risk).toBe('high');
+      expect(assessCommand('sudo env reboot').risk).toBe('high');
+      expect(assessCommand("bash -c 'rm -rf /'").risk).toBe('high');
+    });
 
-test('auto readonly sessions allow only explicit readonly commands', () => {
-  assert.equal(authorizeCommand('auto_readonly', 'df -h').allowed, true);
-  assert.equal(authorizeCommand('auto_readonly', 'mkdir /tmp/demo').allowed, false);
-  assert.equal(authorizeCommand('auto_readonly', 'ls && python mutate.py').allowed, false);
-  assert.equal(authorizeCommand('auto_readonly', 'ls & python mutate.py').allowed, false);
-});
+    const trustedSessionHighRiskCommands = [
+      String.raw`r\m -rf /`,
+      String.raw`system\ctl restart ssh`,
+      "dash -c 'rm -rf /'",
+      'dd of=/dev/sda',
+      'poweroff',
+      'halt',
+      'systemctl poweroff',
+      'fdisk /dev/sda',
+      'systemctl restart ssh.socket',
+      'rm -r /home'
+    ];
 
-test('client-approved sessions allow write commands', () => {
-  assert.equal(authorizeCommand('ask_every_time', 'mkdir /tmp/demo').allowed, true);
-  assert.equal(authorizeCommand('trusted_session', 'mkdir /tmp/demo').allowed, true);
-});
+    for (const command of trustedSessionHighRiskCommands) {
+      it(`trusted sessions reject high risk command: ${command}`, () => {
+        expect(assessCommand(command).risk).toBe('high');
+        expect(authorizeCommand('trusted_session', command).allowed).toBe(false);
+        expect(authorizeCommand('ask_every_time', command).allowed).toBe(true);
+      });
+    }
 
-test('authorization levels preserve per-operation approval for high risk commands', () => {
-  const command = 'rm -rf /tmp/demo';
+    it('a trailing unquoted backslash fails closed without throwing', () => {
+      const command = 'ls\\';
+      expect(() => assessCommand(command)).not.toThrow();
+      expect(assessCommand(command).risk).toBe('write');
+      expect(authorizeCommand('auto_readonly', command).allowed).toBe(false);
+    });
 
-  assert.equal(authorizeCommand('trusted_session', command).allowed, false);
-  assert.equal(authorizeCommand('ask_every_time', command).allowed, true);
-  assert.throws(
-    () => enforceCommandAuthorization('trusted_session', command),
-    /高危操作仍需逐次审批.*每次询问/
-  );
-});
+    it('backslashes inside single quotes remain literal', () => {
+      const command = String.raw`r'\m' -rf /`;
+      expect(assessCommand(command).risk).toBe('write');
+      expect(authorizeCommand('trusted_session', command).allowed).toBe(true);
+    });
 
-test('auto readonly sessions allow downloads but deny uploads', () => {
-  assert.equal(authorizeTransfer('auto_readonly', 'download').allowed, true);
-  assert.equal(authorizeTransfer('auto_readonly', 'upload').allowed, false);
-  assert.equal(authorizeTransfer('ask_every_time', 'upload').allowed, true);
-});
+    it('append environment assignments cannot hide high risk commands from trusted sessions', () => {
+      const commands = [
+        'env FOO+=x rm -rf /',
+        'sudo FOO+=x systemctl restart ssh'
+      ];
+      for (const command of commands) {
+        expect(assessCommand(command).risk).toBe('high');
+        expect(authorizeCommand('trusted_session', command).allowed).toBe(false);
+      }
+    });
+  });
 
-test('auto readonly sessions enforce command authorization', () => {
-  assert.throws(
-    () => enforceCommandAuthorization('auto_readonly', 'mkdir /tmp/demo'),
-    /当前会话为“只读自动”/
-  );
-  assert.doesNotThrow(() => enforceCommandAuthorization('auto_readonly', 'df -h'));
-});
+  describe('边界情况', () => {
+    it('deeply wrapped commands require approval without overflowing the parser', () => {
+      const deeplyWrapped = 'env '.repeat(10_000) + 'ls';
+      expect(() => assessCommand(deeplyWrapped)).not.toThrow();
+      expect(assessCommand(deeplyWrapped).risk).toBe('write');
+      expect(authorizeCommand('auto_readonly', deeplyWrapped).allowed).toBe(false);
+    });
 
-test('auto readonly sessions enforce transfer authorization', () => {
-  assert.throws(
-    () => enforceTransferAuthorization('auto_readonly', 'upload'),
-    /已拒绝文件上传/
-  );
-  assert.doesNotThrow(() => enforceTransferAuthorization('auto_readonly', 'download'));
+    it('wrapper nesting beyond the policy limit requires approval', () => {
+      const deeplyWrapped = 'env '.repeat(33) + 'rm -rf /';
+      expect(assessCommand(deeplyWrapped).risk).toBe('write');
+      expect(authorizeCommand('auto_readonly', deeplyWrapped).allowed).toBe(false);
+    });
+
+    it('overlong commands require approval without throwing', () => {
+      const overlongCommand = 'ls ' + 'a'.repeat(40_000);
+      expect(() => assessCommand(overlongCommand)).not.toThrow();
+      expect(assessCommand(overlongCommand).risk).toBe('write');
+      expect(authorizeCommand('auto_readonly', overlongCommand).allowed).toBe(false);
+    });
+
+    it('empty commands are treated as write operations', () => {
+      expect(assessCommand('   ').risk).toBe('write');
+    });
+  });
+
+  describe('授权级别', () => {
+    it('auto readonly sessions allow only explicit readonly commands', () => {
+      expect(authorizeCommand('auto_readonly', 'df -h').allowed).toBe(true);
+      expect(authorizeCommand('auto_readonly', 'mkdir /tmp/demo').allowed).toBe(false);
+      expect(authorizeCommand('auto_readonly', 'ls && python mutate.py').allowed).toBe(false);
+      expect(authorizeCommand('auto_readonly', 'ls & python mutate.py').allowed).toBe(false);
+    });
+
+    it('client-approved sessions allow write commands', () => {
+      expect(authorizeCommand('ask_every_time', 'mkdir /tmp/demo').allowed).toBe(true);
+      expect(authorizeCommand('trusted_session', 'mkdir /tmp/demo').allowed).toBe(true);
+    });
+
+    it('authorization levels preserve per-operation approval for high risk commands', () => {
+      const command = 'rm -rf /tmp/demo';
+      expect(authorizeCommand('trusted_session', command).allowed).toBe(false);
+      expect(authorizeCommand('ask_every_time', command).allowed).toBe(true);
+      expect(() => enforceCommandAuthorization('trusted_session', command)).toThrow(
+        /高危操作仍需逐次审批.*每次询问/
+      );
+    });
+
+    it('auto readonly sessions allow downloads but deny uploads', () => {
+      expect(authorizeTransfer('auto_readonly', 'download').allowed).toBe(true);
+      expect(authorizeTransfer('auto_readonly', 'upload').allowed).toBe(false);
+      expect(authorizeTransfer('ask_every_time', 'upload').allowed).toBe(true);
+    });
+
+    it('auto readonly sessions enforce command authorization', () => {
+      expect(() => enforceCommandAuthorization('auto_readonly', 'mkdir /tmp/demo')).toThrow(
+        /当前会话为\u201c只读自动\u201d/
+      );
+      expect(() => enforceCommandAuthorization('auto_readonly', 'df -h')).not.toThrow();
+    });
+
+    it('auto readonly sessions enforce transfer authorization', () => {
+      expect(() => enforceTransferAuthorization('auto_readonly', 'upload')).toThrow(
+        /已拒绝文件上传/
+      );
+      expect(() => enforceTransferAuthorization('auto_readonly', 'download')).not.toThrow();
+    });
+  });
 });
